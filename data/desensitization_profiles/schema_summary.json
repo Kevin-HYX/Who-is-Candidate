@@ -1,0 +1,1129 @@
+{
+  "source_file": "D:\\WeChat\\xwechat_files\\wxid_xl0814bjst8422_152d\\msg\\file\\2026-06\\1000_Desensitization_profiles(1).jsonl",
+  "stored_raw_file": "D:\\Who is Candidate\\data\\desensitization_profiles\\1000_Desensitization_profiles.jsonl",
+  "row_count": 1000,
+  "parse_errors": [],
+  "file_size_bytes": 5436709,
+  "top_level_field_stats": {
+    "active_experience_company_id": {
+      "present_count": 630,
+      "missing_count": 370,
+      "type_counts": {
+        "integer": 630
+      },
+      "null_count": 0,
+      "empty_string_count": 0,
+      "empty_array_count": 0,
+      "empty_object_count": 0,
+      "sample_values": [
+        2435662,
+        10945246,
+        88347986,
+        5763468,
+        27001833
+      ]
+    },
+    "active_experience_department": {
+      "present_count": 771,
+      "missing_count": 229,
+      "type_counts": {
+        "string": 771
+      },
+      "null_count": 0,
+      "empty_string_count": 0,
+      "empty_array_count": 0,
+      "empty_object_count": 0,
+      "sample_values": [
+        "Other",
+        "Finance & Accounting",
+        "C-Suite",
+        "Medical",
+        "Operations"
+      ]
+    },
+    "active_experience_description": {
+      "present_count": 234,
+      "missing_count": 766,
+      "type_counts": {
+        "string": 234
+      },
+      "null_count": 0,
+      "empty_string_count": 0,
+      "empty_array_count": 0,
+      "empty_object_count": 0,
+      "sample_values": [
+        "Sole Proprieter",
+        "• Developed business plan for a complete medical billing company • Currently managing two Physicians billing and collections with ninety-eight percent accuracy. • Assist the Physicians with completion and negotiating contracts with insurance companies. • Notify and training Physicians offices of new updates and HIPPA releases from insurance companies. • Developed and initiating a marketing plan. • Research CMS, AMA, HIPAA, and DME policies and develop policies that meet and exceed the requirements. • Developing policies, procedures and initiating HIPAA compliance. Show less",
+        "I am charge of the Audio / Visual for the Union County, NC Government",
+        "Governance manager for enterprise-level incident management organization.",
+        "Department of Materials Design and Innovation"
+      ]
+    },
+    "active_experience_management_level": {
+      "present_count": 771,
+      "missing_count": 229,
+      "type_counts": {
+        "string": 771
+      },
+      "null_count": 0,
+      "empty_string_count": 0,
+      "empty_array_count": 0,
+      "empty_object_count": 0,
+      "sample_values": [
+        "Specialist",
+        "Owner",
+        "Senior",
+        "Director",
+        "Partner"
+      ]
+    },
+    "active_experience_title": {
+      "present_count": 874,
+      "missing_count": 126,
+      "type_counts": {
+        "string": 874
+      },
+      "null_count": 0,
+      "empty_string_count": 0,
+      "empty_array_count": 0,
+      "empty_object_count": 0,
+      "sample_values": [
+        "Certified Residential Appraiser fha Sole Proprieter",
+        "Independent Contractor",
+        "Part Time Bank Teller",
+        "Owner",
+        "Founder ceo"
+      ]
+    },
+    "awards": {
+      "present_count": 1000,
+      "missing_count": 0,
+      "type_counts": {
+        "array": 1000
+      },
+      "null_count": 0,
+      "empty_string_count": 0,
+      "empty_array_count": 910,
+      "empty_object_count": 0,
+      "sample_values": []
+    },
+    "certifications": {
+      "present_count": 1000,
+      "missing_count": 0,
+      "type_counts": {
+        "array": 1000
+      },
+      "null_count": 0,
+      "empty_string_count": 0,
+      "empty_array_count": 779,
+      "empty_object_count": 0,
+      "sample_values": []
+    },
+    "courses": {
+      "present_count": 1000,
+      "missing_count": 0,
+      "type_counts": {
+        "array": 1000
+      },
+      "null_count": 0,
+      "empty_string_count": 0,
+      "empty_array_count": 937,
+      "empty_object_count": 0,
+      "sample_values": []
+    },
+    "education": {
+      "present_count": 1000,
+      "missing_count": 0,
+      "type_counts": {
+        "array": 1000
+      },
+      "null_count": 0,
+      "empty_string_count": 0,
+      "empty_array_count": 0,
+      "empty_object_count": 0,
+      "sample_values": []
+    },
+    "experience": {
+      "present_count": 1000,
+      "missing_count": 0,
+      "type_counts": {
+        "array": 1000
+      },
+      "null_count": 0,
+      "empty_string_count": 0,
+      "empty_array_count": 0,
+      "empty_object_count": 0,
+      "sample_values": []
+    },
+    "headline": {
+      "present_count": 944,
+      "missing_count": 56,
+      "type_counts": {
+        "string": 944
+      },
+      "null_count": 0,
+      "empty_string_count": 0,
+      "empty_array_count": 0,
+      "empty_object_count": 0,
+      "sample_values": [
+        "Certified Residential Appraiser +FHA Sole Proprieter at Appraisal Center, LLC",
+        "Construction Business Development",
+        "Administrator and Billing Manager",
+        "Bachelor of Applied Science (B.A.Sc.) at Howard Payne University",
+        "Owner at ChiroWise Chiropractic Center"
+      ]
+    },
+    "is_decision_maker": {
+      "present_count": 771,
+      "missing_count": 229,
+      "type_counts": {
+        "boolean": 771
+      },
+      "null_count": 0,
+      "empty_string_count": 0,
+      "empty_array_count": 0,
+      "empty_object_count": 0,
+      "sample_values": [
+        false,
+        true
+      ]
+    },
+    "is_working": {
+      "present_count": 874,
+      "missing_count": 126,
+      "type_counts": {
+        "boolean": 874
+      },
+      "null_count": 0,
+      "empty_string_count": 0,
+      "empty_array_count": 0,
+      "empty_object_count": 0,
+      "sample_values": [
+        true
+      ]
+    },
+    "patents": {
+      "present_count": 1000,
+      "missing_count": 0,
+      "type_counts": {
+        "array": 1000
+      },
+      "null_count": 0,
+      "empty_string_count": 0,
+      "empty_array_count": 996,
+      "empty_object_count": 0,
+      "sample_values": []
+    },
+    "publications": {
+      "present_count": 1000,
+      "missing_count": 0,
+      "type_counts": {
+        "array": 1000
+      },
+      "null_count": 0,
+      "empty_string_count": 0,
+      "empty_array_count": 975,
+      "empty_object_count": 0,
+      "sample_values": []
+    },
+    "skills": {
+      "present_count": 1000,
+      "missing_count": 0,
+      "type_counts": {
+        "array": 1000
+      },
+      "null_count": 0,
+      "empty_string_count": 0,
+      "empty_array_count": 148,
+      "empty_object_count": 0,
+      "sample_values": []
+    },
+    "summary": {
+      "present_count": 441,
+      "missing_count": 559,
+      "type_counts": {
+        "string": 441
+      },
+      "null_count": 0,
+      "empty_string_count": 0,
+      "empty_array_count": 0,
+      "empty_object_count": 0,
+      "sample_values": [
+        "Experienced Squadron Commander with a demonstrated history of working in the Management Consulting industry. Skilled in U.S. Department of Defense, Government, Government Contracting, Team Building, and Air Force. Strong military and protective services professional with a Master of Business Administration (MBA) focused in Strategic Sourcing from Naval Postgraduate School.",
+        "Medical billing, compliance and collections are the primary function I provide as a billing manager. My experience in the medical field includes 20 years of experience; including, but not limited to: working in or with Hospitals, Insurance Companies, Physician’s office, Sleep medicine, Durable Medical Equipment and independent contractor with Chiropractors. I follow the medical industry receiving updated information from the AAPC, AMA, Private insurance companies, Medicare and Medicaid, and the OIG. Gathering this information has aided in developing a organized system that will support the reduction of denied claims and decrease the accounts receivable while increasing the incoming revenue of the medical specialist office",
+        "I am a hard working goal oriented person. I have a bachelor of science degree in general political science with a minor in sociology. I enjoy working with a team or working independently. I also enjoy working in the public sphere and providing accurate and excellent costumer service.",
+        "I am a self-motivated strategic planner, director of project management and problem solver, with a strong record of delivering results, and with broad-based experience in both Fortune 50 organizations and in small companies. My greatest successes have been with overseeing and leading cross-functional teams in complex projects implementing corporate strategy and standardizing and improving business processes, particularly in the areas of governance, incident management, product development and supply chain management. Recognized as a results oriented, strategic thinker, and leader. I can provide creative solutions and management skills in the following areas: Strategic Planning, Governance, Project Management, Margin Improvement, Budgeting &amp; Sales Forecasting, High-Level Negotiations, Supply Chain Optimization, Manufacturing &amp; Service Process Improvement, Team Leadership, Business Development, Kaizen, APQP Implementation, Structured Problem Solving, ISO Certification, BCBS 239 Compliance, Total Cost Management, Value Analysis, and Value Engineering.",
+        "Data-driven material discovery"
+      ]
+    },
+    "total_experience_duration_months": {
+      "present_count": 945,
+      "missing_count": 55,
+      "type_counts": {
+        "integer": 945
+      },
+      "null_count": 0,
+      "empty_string_count": 0,
+      "empty_array_count": 0,
+      "empty_object_count": 0,
+      "sample_values": [
+        341,
+        357,
+        81,
+        144,
+        141
+      ]
+    },
+    "user_id": {
+      "present_count": 1000,
+      "missing_count": 0,
+      "type_counts": {
+        "integer": 1000
+      },
+      "null_count": 0,
+      "empty_string_count": 0,
+      "empty_array_count": 0,
+      "empty_object_count": 0,
+      "sample_values": [
+        218048604,
+        69491012,
+        218051274,
+        522047767,
+        69588958
+      ]
+    }
+  },
+  "array_field_stats": {
+    "skills": {
+      "profiles_with_items": 852,
+      "total_items": 11453,
+      "min_items_per_profile": 0,
+      "max_items_per_profile": 124,
+      "avg_items_per_profile": 11.45,
+      "item_type_counts": {
+        "string": 11453
+      },
+      "item_sample_values": [
+        "residential",
+        "fha",
+        "property management",
+        "flights",
+        "commercial aviation",
+        "military",
+        "avionics",
+        "flight safety",
+        "rentals",
+        "property"
+      ],
+      "object_field_stats": {}
+    },
+    "experience": {
+      "profiles_with_items": 1000,
+      "total_items": 4286,
+      "min_items_per_profile": 1,
+      "max_items_per_profile": 25,
+      "avg_items_per_profile": 4.29,
+      "item_type_counts": {
+        "object": 4286
+      },
+      "item_sample_values": [],
+      "object_field_stats": {
+        "address_city": {
+          "present_count": 3656,
+          "missing_count": 630,
+          "type_counts": {
+            "string": 3656
+          },
+          "null_count": 0,
+          "empty_string_count": 1325,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            "",
+            "Colorado Springs",
+            "Marietta",
+            "Stockbridge",
+            "Wingate"
+          ]
+        },
+        "address_country": {
+          "present_count": 3656,
+          "missing_count": 630,
+          "type_counts": {
+            "string": 3656
+          },
+          "null_count": 0,
+          "empty_string_count": 1001,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            "",
+            "United States",
+            "Canada",
+            "Bermuda",
+            "Colombia"
+          ]
+        },
+        "address_state": {
+          "present_count": 3656,
+          "missing_count": 630,
+          "type_counts": {
+            "string": 3656
+          },
+          "null_count": 0,
+          "empty_string_count": 1126,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            "",
+            "California",
+            "Colorado",
+            "Georgia",
+            "North Carolina"
+          ]
+        },
+        "company_employees_count": {
+          "present_count": 2930,
+          "missing_count": 1356,
+          "type_counts": {
+            "integer": 2930
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            245788,
+            37,
+            1232,
+            387,
+            132
+          ]
+        },
+        "company_founded_year": {
+          "present_count": 1731,
+          "missing_count": 2555,
+          "type_counts": {
+            "integer": 1731
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            1896,
+            1842,
+            1995,
+            1882,
+            1944
+          ]
+        },
+        "company_id": {
+          "present_count": 2974,
+          "missing_count": 1312,
+          "type_counts": {
+            "integer": 2974
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            20021918,
+            2435662,
+            26912576,
+            10945246,
+            3634348
+          ]
+        },
+        "company_name": {
+          "present_count": 4283,
+          "missing_count": 3,
+          "type_counts": {
+            "string": 4283
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            "Appraisal Center, LLC",
+            "Perry Corporation",
+            "United States Air Force",
+            "MASKED",
+            "Regenesis Health Services, Inc."
+          ]
+        },
+        "company_size_range": {
+          "present_count": 4286,
+          "missing_count": 0,
+          "type_counts": {
+            "integer": 4286
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            -1,
+            7,
+            4,
+            3,
+            5
+          ]
+        },
+        "company_tags": {
+          "present_count": 4286,
+          "missing_count": 0,
+          "type_counts": {
+            "array": 4286
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 1474,
+          "empty_object_count": 0,
+          "sample_values": []
+        },
+        "company_type": {
+          "present_count": 2772,
+          "missing_count": 1514,
+          "type_counts": {
+            "string": 2772
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            "Government Agency",
+            "Privately Held",
+            "Educational",
+            "Nonprofit",
+            "Public Company"
+          ]
+        },
+        "date_from_month": {
+          "present_count": 3847,
+          "missing_count": 439,
+          "type_counts": {
+            "integer": 3847
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            9,
+            7,
+            6,
+            8,
+            4
+          ]
+        },
+        "date_from_year": {
+          "present_count": 4200,
+          "missing_count": 86,
+          "type_counts": {
+            "integer": 4200
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            2001,
+            1990,
+            2016,
+            2018,
+            2004
+          ]
+        },
+        "date_to_month": {
+          "present_count": 2878,
+          "missing_count": 1408,
+          "type_counts": {
+            "integer": 2878
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            5,
+            8,
+            4,
+            3,
+            6
+          ]
+        },
+        "date_to_year": {
+          "present_count": 3164,
+          "missing_count": 1122,
+          "type_counts": {
+            "integer": 3164
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            1995,
+            2018,
+            2020,
+            2009,
+            2011
+          ]
+        },
+        "description": {
+          "present_count": 1950,
+          "missing_count": 2336,
+          "type_counts": {
+            "string": 1950
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            "Sole Proprieter",
+            "Diagnosed and Repaired Office Equipment",
+            "Personal responsibilities include but not limited to: • Reviewing and implementing policies and procedures maintaining our accreditation. • Maintain and update all AHCA, Medicare and DOH licenses • Reviewing new compliance policies from Medicare and other insurances to reduce errors in billing. • Follow the OIG postings to review their updates and policies • Entering in all patients into the computer software. • Printing and reviewing all CMN's for signatures and appropriate information. • Billing all insurance companies and posting all claims. • Collecting from the insurance companies and the patients. • Monitoring activities making sure techs are taking care of the patients. • Keeping systems updated and database maintained with new diagnosis and procedure codes. • Training and Education. • Review vendor invoices for accuracy and call to make corrections Show less",
+            "• Developed business plan for a complete medical billing company • Currently managing two Physicians billing and collections with ninety-eight percent accuracy. • Assist the Physicians with completion and negotiating contracts with insurance companies. • Notify and training Physicians offices of new updates and HIPPA releases from insurance companies. • Developed and initiating a marketing plan. • Research CMS, AMA, HIPAA, and DME policies and develop policies that meet and exceed the requirements. • Developing policies, procedures and initiating HIPAA compliance. Show less",
+            "Performed new patient examinations and re-evaluations consisting of a detailed patient history, physical exam, neurological analysis,orthopeadic exam, vascular evaluation, chiropractic analysis and x-ray analysis. Managed and modified treatment plans of patients based on findings recorded from examinations and consultation with overseeing unit doctors. Administered chiropractic treatment to patients based on specific needs utilizing Full Spine, Thompson, and Toggle techniques. Provided additional therapies in the Functional Rehabilitation Center consisting of e-stim and ultrasound. Volunteered to conduct the new patient health orientation class as needed. Show less"
+          ]
+        },
+        "duration_months": {
+          "present_count": 4200,
+          "missing_count": 86,
+          "type_counts": {
+            "integer": 4200
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            285,
+            56,
+            337,
+            26,
+            20
+          ]
+        },
+        "end_time": {
+          "present_count": 3164,
+          "missing_count": 1122,
+          "type_counts": {
+            "string": 3164
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            "1995-05-01",
+            "2018-08-01",
+            "2020-04-01",
+            "2009-04-01",
+            "2011-01-01"
+          ]
+        },
+        "full_address": {
+          "present_count": 3656,
+          "missing_count": 630,
+          "type_counts": {
+            "string": 3656
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            "550 D Street West; Suite 1; Randolph AFB, TX 78150-4527, US",
+            "Beale Afb, California",
+            "Colorado Springs, Colorado",
+            "Marietta, GA",
+            "Stockbridge, GA"
+          ]
+        },
+        "industry": {
+          "present_count": 2898,
+          "missing_count": 1388,
+          "type_counts": {
+            "string": 2898
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            "Manufacturing",
+            "Financial Services",
+            "Education",
+            "Government Administration",
+            "Technology, Information and Media"
+          ]
+        },
+        "is_current": {
+          "present_count": 4286,
+          "missing_count": 0,
+          "type_counts": {
+            "boolean": 4286
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            true,
+            false
+          ]
+        },
+        "level": {
+          "present_count": 3425,
+          "missing_count": 861,
+          "type_counts": {
+            "string": 3425
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            "Specialist",
+            "Manager",
+            "Intern",
+            "Owner",
+            "Director"
+          ]
+        },
+        "order_in_profile": {
+          "present_count": 4286,
+          "missing_count": 0,
+          "type_counts": {
+            "integer": 4286
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ]
+        },
+        "role": {
+          "present_count": 3425,
+          "missing_count": 861,
+          "type_counts": {
+            "string": 3425
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            "Trades",
+            "Other",
+            "Project Management",
+            "Finance & Accounting",
+            "Administrative"
+          ]
+        },
+        "start_time": {
+          "present_count": 4200,
+          "missing_count": 86,
+          "type_counts": {
+            "string": 4200
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            "2001-09-01",
+            "1990-09-01",
+            "1990-07-01",
+            "2016-06-01",
+            "2018-08-01"
+          ]
+        },
+        "title": {
+          "present_count": 4286,
+          "missing_count": 0,
+          "type_counts": {
+            "string": 4286
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            "Certified Residential Appraiser fha Sole Proprieter",
+            "Service Tech",
+            "Airman",
+            "Commander, 9th Contracting Squadron",
+            "Program Manager"
+          ]
+        }
+      }
+    },
+    "education": {
+      "profiles_with_items": 1000,
+      "total_items": 1751,
+      "min_items_per_profile": 1,
+      "max_items_per_profile": 15,
+      "avg_items_per_profile": 1.75,
+      "item_type_counts": {
+        "object": 1751
+      },
+      "item_sample_values": [],
+      "object_field_stats": {
+        "begin_year": {
+          "present_count": 1376,
+          "missing_count": 375,
+          "type_counts": {
+            "integer": 1376
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            1986,
+            2009,
+            2007,
+            2013,
+            2010
+          ]
+        },
+        "degree_level": {
+          "present_count": 1751,
+          "missing_count": 0,
+          "type_counts": {
+            "integer": 1751
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            0,
+            2,
+            1,
+            3
+          ]
+        },
+        "degree_str": {
+          "present_count": 1582,
+          "missing_count": 169,
+          "type_counts": {
+            "string": 1582
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            "Associate of Science (A.S.), Electrical and Electronics Engineering",
+            "Master of Business Administration (MBA), Strategic Sourcing",
+            "MBA/HMC, Specialized in Health Care Management",
+            "Bachelor of Applied Science (B.A.Sc.), Political Science and Government",
+            "Bachelor of Arts (B.A.), Psychology"
+          ]
+        },
+        "end_year": {
+          "present_count": 1346,
+          "missing_count": 405,
+          "type_counts": {
+            "integer": 1346
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            1990,
+            2010,
+            2008,
+            2017,
+            2009
+          ]
+        },
+        "gpa": {
+          "present_count": 97,
+          "missing_count": 1654,
+          "type_counts": {
+            "number": 97
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            3.51,
+            3.94,
+            3.6,
+            3.18,
+            3.5
+          ]
+        },
+        "institution_city": {
+          "present_count": 1223,
+          "missing_count": 528,
+          "type_counts": {
+            "string": 1223
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            "Marion",
+            "Brownwood",
+            "Statesboro",
+            "Marietta",
+            "Wingate"
+          ]
+        },
+        "institution_country": {
+          "present_count": 1319,
+          "missing_count": 432,
+          "type_counts": {
+            "string": 1319
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            "United States",
+            "China",
+            "Denmark",
+            "Portugal",
+            "Pakistan"
+          ]
+        },
+        "institution_full_address": {
+          "present_count": 1368,
+          "missing_count": 383,
+          "type_counts": {
+            "string": 1368
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            "1467 Mount Vernon Ave; Marion, OH 43302-5694, US",
+            "1000 Fisk St.; Brownwood, tx 76801-2794, US",
+            "1332 Southern Drive; Statesboro, Georgia 30458, US",
+            "1269 Barclay Circle; Marietta, ga 30060, US",
+            "220 North Camden Road; Wingate, nc 28174-0159, US"
+          ]
+        },
+        "institution_name": {
+          "present_count": 1749,
+          "missing_count": 2,
+          "type_counts": {
+            "string": 1749
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            "Marion Technical College",
+            "Naval Postgraduate School",
+            "Phoenix University",
+            "Howard Payne University",
+            "Georgia Southern University"
+          ]
+        },
+        "institution_state": {
+          "present_count": 1220,
+          "missing_count": 531,
+          "type_counts": {
+            "string": 1220
+          },
+          "null_count": 0,
+          "empty_string_count": 3,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            "Ohio",
+            "Texas",
+            "Georgia",
+            "North Carolina",
+            "Utah"
+          ]
+        },
+        "is_current": {
+          "present_count": 1751,
+          "missing_count": 0,
+          "type_counts": {
+            "boolean": 1751
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            false,
+            true
+          ]
+        },
+        "major": {
+          "present_count": 1751,
+          "missing_count": 0,
+          "type_counts": {
+            "string": 1751
+          },
+          "null_count": 0,
+          "empty_string_count": 327,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            "Electrical And Electronics Engineering",
+            "Strategic Sourcing",
+            "Specialized In Health Care Management",
+            "Political Science And Government",
+            "Psychology"
+          ]
+        },
+        "order_in_profile": {
+          "present_count": 1751,
+          "missing_count": 0,
+          "type_counts": {
+            "integer": 1751
+          },
+          "null_count": 0,
+          "empty_string_count": 0,
+          "empty_array_count": 0,
+          "empty_object_count": 0,
+          "sample_values": [
+            1,
+            2,
+            3,
+            6,
+            4
+          ]
+        }
+      }
+    },
+    "awards": {
+      "profiles_with_items": 90,
+      "total_items": 225,
+      "min_items_per_profile": 0,
+      "max_items_per_profile": 10,
+      "avg_items_per_profile": 0.23,
+      "item_type_counts": {
+        "string": 225
+      },
+      "item_sample_values": [
+        "NJPF Award for Third Place out of all 2-Year Colleges for the Layout & Design of the Cumberland County College School Newspaper - New Jersey Press Foundation - I received third place for the layout and design of my newspaper page in 2013. This contest included all participating 2-year colleges in New Jersey. I was proud to receive this honor and to represent the excellence of Cumberland County College.",
+        "Encompass Scholar - Program by Bayer Crop Science - Soft skills, Leadership, and DEI training",
+        "Inspiring People - IUCN – the International Union for Conservation of Nature - Featured in Protecting the Planet program of the IUCN A young conservation champion for Pakistan - Aziz Ahmed",
+        "Award of Appreciation - World Health Organization",
+        "Erasmus Mundus Joint Master's Scholarship Award - Education, Audiovisual and Culture Executive Agency (EACEA) of the European Union - A unique 2-year master's program jointly offered by four top European Universities: Technische Universität Hamburg (TUHH), Germany; Universitat Autònoma de Barcelona (UAB), Spain; Universidade de Aveiro (UA), Portugal; and Aalborg Universitet (AAU), Denmark.",
+        "Certificate of Appreciation - World Health Organization",
+        "Vice-Chancellor’s Silver Medal - University of Sindh, Jamshoro, Pakistan - First position in MSc. class 2007-2008",
+        "Girl Scout Gold Award - GSUSA",
+        "Passed the CPA Exam",
+        "President's List - Pratt Institute"
+      ],
+      "object_field_stats": {}
+    },
+    "courses": {
+      "profiles_with_items": 63,
+      "total_items": 431,
+      "min_items_per_profile": 0,
+      "max_items_per_profile": 30,
+      "avg_items_per_profile": 0.43,
+      "item_type_counts": {
+        "string": 431
+      },
+      "item_sample_values": [
+        "Business Communication",
+        "General Proofreading",
+        "Public Relations Writing",
+        "Public Speaking",
+        "Lean SixSigma",
+        "Mini MBA",
+        "Project Management Fundamentals",
+        "Branding & Messaging",
+        "Creative Coding",
+        "Digital Prototyping"
+      ],
+      "object_field_stats": {}
+    },
+    "certifications": {
+      "profiles_with_items": 221,
+      "total_items": 612,
+      "min_items_per_profile": 0,
+      "max_items_per_profile": 10,
+      "avg_items_per_profile": 0.61,
+      "item_type_counts": {
+        "string": 612
+      },
+      "item_sample_values": [
+        "Artificial Intelligence: Implications for Business Strategy - MIT Sloan Executive Education",
+        "OSHA30 - USF Health",
+        "Private Aircraft Pilot - Federal Aviation Administration",
+        "Notary Public - State of New York",
+        "ISO 14001:2015 Environmental Management System Lead Auditor Training Course - RICI Pakistan Pvt Ltd.",
+        "NEBOSH International General Certificate in Occupational Health and Safety - NEBOSH",
+        "Occupation Health & Safety Lead Auditor Training Course OHSAS 18001:2007 - RICI Pakistan Pvt Ltd.",
+        "Member - Soil Science Society of America",
+        "Member - Crop Science Society of America",
+        "Member - American Society of Agronomy"
+      ],
+      "object_field_stats": {}
+    },
+    "publications": {
+      "profiles_with_items": 25,
+      "total_items": 72,
+      "min_items_per_profile": 0,
+      "max_items_per_profile": 10,
+      "avg_items_per_profile": 0.07,
+      "item_type_counts": {
+        "string": 72
+      },
+      "item_sample_values": [
+        "Effect of Surface Microstructure on Electrochemical Performance of Garnet Solid Electrolytes - Cubic garnet phases based on Al-substituted Li7La3Zr2O12 (LLZO) have high ionic conductivities and exhibit good stability versus metallic lithium, making them of particular interest for use in next-generation rechargeable battery systems. However, high interfacial impedances have precluded their successful utilization in such devices until the present. Careful engineering of the surface microstructure, especially the grain boundaries, is critical to achieving low interfacial resistances and enabling long-term stable cycling with lithium metal. This study presents the fabrication of LLZO heterostructured solid electrolytes, which allowed direct correlation of surface microstructure with the electrochemical characteristics of the interface. Grain orientations and grain boundary distributions of samples with differing microstructures were mapped using high-resolution synchrotron polychromatic X-ray Laue microdiffraction. The electrochemical characteristics are strongly dependent upon surface microstructure, with small grained samples exhibiting much lower interfacial resistances and better cycling behavior than those with larger grain sizes. Low area specific resistances of 37 Ω cm2 were achieved; low enough to ensure stable cycling with minimal polarization losses, thus removing a significant obstacle toward practical implementation of solid electrolytes in high energy density batteries. Show less",
+        "The origin of high electrolyte–electrode interfacial resistances in lithium cells containing garnet type solid electrolytes - Dense LLZO (Al-substituted Li7La3Zr2O12) pellets were processed in controlled atmospheres to investigate the relationships between the surface chemistry and interfacial behavior in lithium cells. Laser induced breakdown spectroscopy (LIBS), scanning electron microscopy (SEM), X-ray diffraction (XRD), Raman spectroscopy, synchrotron X-ray photoelectron spectroscopy (XPS) and soft X-ray absorption spectroscopy (XAS) studies revealed that Li2CO3 was formed on the surface when LLZO pellets were exposed to air. The distribution and thickness of the Li2CO3 layer were estimated by a combination of bulk and surface sensitive techniques with various probing depths. First-principles thermodynamic calculations confirmed that LLZO has an energetic preference to form Li2CO3 in air. Exposure to air and the subsequent formation of Li2CO3 at the LLZO surface is the source of the high interfacial impedances observed in cells with lithium electrodes. Surface polishing can effectively remove Li2CO3 and dramatically improve the interfacial properties. Polished samples in lithium cells had an area specific resistance (ASR) of only 109 Ω cm2 for the LLZO/Li interface, the lowest reported value for Al-substituted LLZO. Galvanostatic cycling results obtained from lithium symmetrical cells also suggest that the quality of the LLZO/lithium interface has a significant impact on the device lifetime. Show less",
+        "Distinct Solid-Electrolyte-Interphases on Sn (100) and (001) Electrodes Studied by Soft X-Ray Spectroscopy - Soft X-ray absorption spectroscopy with different probe depth was employed to characterize the solid electrolyte interphases (SEIs) formed on β-Sn single crystals with two different surface orientations. Based on comparative studies of C-K, O-K, and F-K absorption spectra between the SEIs and reference samples, SEI on Sn (100) mainly consists of porous Li2CO3 species with electrolyte uptake, while SEI on Sn (001) essentially consists of LiF and organic molecules, with a small amount of –CO3 and electrolyte buried inside. Theoretical calculation suggests that Sn (001) surface is more reactive than (100), especially after air exposure. The reactive (001) surface facilitates the decomposition of LiPF6 to form a LiF layer. In contrast, SEI on (100) surface is predominately from the typical decomposition of carbonate-based electrolyte. While the LiF passivates Sn (001) electrode after one cycle, the porous carbonate layer on (100) surface does not prevent further decomposition of electrolyte after many cycles. This leads to drastically different electrochemical behavior and morphology of the two SEIs. Show less",
+        "Interplay Between Subsurface Ordering, Surface Segregation, and Adsorption on Pt-Ti(111) Near-surface Alloys",
+        "Performance of Cluster Expansions of Coverage-Dependent Adsorption of Atomic Oxygen on Pt(111)",
+        "Ordering and Oxygen Adsorption in Au-Pt/Pt(111) Surface Alloys",
+        "First-principles Study of the Nucleation and Stability of Ordered Precipitates in Ternary Al-Sc-Li Alloys",
+        "First-principles Cluster Expansion Study of Missing-row Reconstructions of Fcc (110) Surfaces",
+        "A Combinatorial Study of the Corrosion and Mechanical Properties of Zn-Al Material Library Fabricated by Ion Beam Sputtering",
+        "The Electronic Structure and Mechanical Properties of MgCu2 Laves Phase Compound"
+      ],
+      "object_field_stats": {}
+    },
+    "patents": {
+      "profiles_with_items": 4,
+      "total_items": 6,
+      "min_items_per_profile": 0,
+      "max_items_per_profile": 2,
+      "avg_items_per_profile": 0.01,
+      "item_type_counts": {
+        "string": 6
+      },
+      "item_sample_values": [
+        "Exterior Sun Visor",
+        "PEPTIDE AND PEPTIDOMIMETIC INHIBITORS - The present invention provides inhibitors and/or antagonists of plasma kallikrein. Also provided are methods of utilizing the inhibitors as therapeutics and provides for the production of peptides and peptide mimetics having improved pharmacokinetic and pharmacodynamic properties for inhibiting plasma kallikrein and their use in the treatment of diseases where reductions in circulating plasma kallikrein activity may be therapeutically beneficial.",
+        "Data validation and/or data conversion using smart contracts in distributed ledger systems",
+        "Data Validation And/or Data Conversion Using Smart Contracts In Distributed Ledger Systems - Computer program products, methods, systems, apparatus, and computing entities are provided for automatically validating and/or converting data in candidate transaction in a distributed ledger systems. The validating and converting can be automatically executed via one or more smart contracts. Once validated and/or converted the candidate transaction may be committed to a ledger in the distributed ledger system.",
+        "MANAGING THE DEVELOPMENT AND USAGE OF MACHINE-LEARNING MODELS AND DATASETS VIA COMMON DATA OBJECTS",
+        "UTILIZING METADATA-BASED CLASSIFICATIONS FOR DATA DISCOVERY IN DATA SETS"
+      ],
+      "object_field_stats": {}
+    }
+  }
+}

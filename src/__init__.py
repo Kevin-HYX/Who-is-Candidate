@@ -1,0 +1,2 @@
+"""Candidate Search Tool package."""
+

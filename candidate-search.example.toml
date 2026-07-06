@@ -1,0 +1,22 @@
+# Copy this file to candidate-search.toml and fill in your local settings.
+# candidate-search.toml is ignored by git because it may contain secrets.
+
+[dashscope]
+# Required. Your DashScope API key.
+# Example: api_key = "sk-..."
+api_key = ""
+
+[models]
+# Required. Chat model used by CLI preprocess.
+preprocess = "qwen-plus"
+
+# Required. Embedding model used by build-index and search query vectors.
+embedding = "text-embedding-v3"
+
+[paths]
+# Required. Raw JSONL profile data.
+# Keep this pointed at the original, unmodified file.
+raw_profiles = "data/desensitization_profiles/1000_Desensitization_profiles.jsonl"
+
+# Required. Local build artifacts produced by preprocess and build-index.
+processed_dir = "data/processed"

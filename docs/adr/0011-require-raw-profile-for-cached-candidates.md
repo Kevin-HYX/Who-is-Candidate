@@ -1,0 +1,3 @@
+# Require raw profiles for cached candidates
+
+Every `user_id` in preprocessed profile cache or embedding/index cache must exist in the raw JSONL profile file. Search must fail with `RAW_PROFILE_NOT_FOUND` when a cached candidate cannot be resolved to a raw profile, rather than skipping the candidate or returning partial results. Search also validates `raw_profile_hash`; when the raw profile has changed since preprocessing, the old preprocessed profile and downstream embeddings are invalid and search fails with `RAW_PROFILE_HASH_MISMATCH` until CLI preprocessing and index building are rerun. SearchResult must always be backed by the original raw profile data.
