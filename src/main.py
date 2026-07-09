@@ -6,31 +6,43 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .evaluation import (
+    BROWSE_DEFAULT_LIMIT,
+    build_test_sample,
+    build_test_sample_index,
+    create_test_sample,
+    create_user_prompt_set,
+    list_retrieval_trials,
+    list_test_samples,
+    list_user_prompt_sets,
+    map_user_prompt_set,
+    preprocess_test_sample,
+    read_retrieval_trial,
+    read_retrieval_trial_errors,
+    read_retrieval_trial_results,
+    read_test_sample,
+    read_test_sample_errors,
+    read_test_sample_preprocessed,
+    read_test_sample_raw,
+    read_user_prompt_set,
+    read_user_prompt_set_errors,
+    read_user_prompt_set_mappings,
+    read_user_prompt_set_prompts,
+    resample_test_sample,
+    run_retrieval_trial,
+)
 from .preprocess import preprocess_profiles
 from .retrieval import (
-    DashScopeModelClient,
+    build_index,
     get_index_status,
     search_candidates,
 )
-from .retrieval import write_status as _write_status
-from .retrieval import (
-    canonical_hash,
-    load_preprocessed_map,
-    load_raw_dataset,
-    merge_write_jsonl_by_user_id,
-    parallel_map_with_retries,
-    search_text_hash,
-    write_latest_errors,
-)
 from .constants import (
     DEFAULT_CONCURRENCY,
-    EMBEDDING_INDEX_VERSION,
-    EMBEDDINGS_FILE,
-    INDEX_ERRORS_FILE,
-    PREPROCESS_SCHEMA_VERSION,
-    SEARCHABLE_DIMENSIONS,
+    MCP_GUIDE_FILE,
+    QUERY_GUIDE_FILE,
 )
-from .schemas import CandidateSearchError, ProcessConfigError, load_config
+from .schemas import CandidateSearchError, ProcessConfigError, load_config, search_tool_schema
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -85,6 +97,159 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_config(mcp_parser)
     mcp_parser.set_defaults(func=cmd_serve_mcp)
 
+    test_sample_create_parser = subparsers.add_parser("test-sample-create")
+    add_common_config(test_sample_create_parser)
+    test_sample_create_parser.add_argument("--sample-id", required=True)
+    test_sample_create_parser.add_argument("--sample-size", type=int, required=True)
+    test_sample_create_parser.add_argument("--seed", type=int, default=None)
+    test_sample_create_parser.add_argument("--preprocess-prompt", required=True)
+    test_sample_create_parser.add_argument("--json", action="store_true")
+    test_sample_create_parser.set_defaults(func=cmd_test_sample_create)
+
+    test_sample_resample_parser = subparsers.add_parser("test-sample-resample")
+    add_common_config(test_sample_resample_parser)
+    test_sample_resample_parser.add_argument("--sample-id", required=True)
+    test_sample_resample_parser.add_argument("--sample-size", type=int, required=True)
+    test_sample_resample_parser.add_argument("--seed", type=int, default=None)
+    test_sample_resample_parser.add_argument("--json", action="store_true")
+    test_sample_resample_parser.set_defaults(func=cmd_test_sample_resample)
+
+    test_sample_show_parser = subparsers.add_parser("test-sample-show")
+    add_common_config(test_sample_show_parser)
+    test_sample_show_parser.add_argument("--sample-id", required=True)
+    test_sample_show_parser.add_argument("--json", action="store_true")
+    test_sample_show_parser.set_defaults(func=cmd_test_sample_show)
+
+    test_sample_list_parser = subparsers.add_parser("test-sample-list")
+    add_common_config(test_sample_list_parser)
+    test_sample_list_parser.add_argument("--json", action="store_true")
+    test_sample_list_parser.set_defaults(func=cmd_test_sample_list)
+
+    test_sample_read_raw_parser = subparsers.add_parser("test-sample-read-raw")
+    add_common_config(test_sample_read_raw_parser)
+    add_common_page(test_sample_read_raw_parser)
+    test_sample_read_raw_parser.add_argument("--sample-id", required=True)
+    test_sample_read_raw_parser.add_argument("--json", action="store_true")
+    test_sample_read_raw_parser.set_defaults(func=cmd_test_sample_read_raw)
+
+    test_sample_read_preprocessed_parser = subparsers.add_parser("test-sample-read-preprocessed")
+    add_common_config(test_sample_read_preprocessed_parser)
+    add_common_page(test_sample_read_preprocessed_parser)
+    test_sample_read_preprocessed_parser.add_argument("--sample-id", required=True)
+    test_sample_read_preprocessed_parser.add_argument("--json", action="store_true")
+    test_sample_read_preprocessed_parser.set_defaults(func=cmd_test_sample_read_preprocessed)
+
+    test_sample_read_errors_parser = subparsers.add_parser("test-sample-read-errors")
+    add_common_config(test_sample_read_errors_parser)
+    add_common_page(test_sample_read_errors_parser)
+    test_sample_read_errors_parser.add_argument("--sample-id", required=True)
+    test_sample_read_errors_parser.add_argument("--json", action="store_true")
+    test_sample_read_errors_parser.set_defaults(func=cmd_test_sample_read_errors)
+
+    test_sample_preprocess_parser = subparsers.add_parser("test-sample-preprocess")
+    add_common_config(test_sample_preprocess_parser)
+    test_sample_preprocess_parser.add_argument("--sample-id", required=True)
+    test_sample_preprocess_parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
+    test_sample_preprocess_parser.add_argument("--discard-cache", action="store_true")
+    test_sample_preprocess_parser.add_argument("--json", action="store_true")
+    test_sample_preprocess_parser.set_defaults(func=cmd_test_sample_preprocess)
+
+    test_sample_build_index_parser = subparsers.add_parser("test-sample-build-index")
+    add_common_config(test_sample_build_index_parser)
+    test_sample_build_index_parser.add_argument("--sample-id", required=True)
+    test_sample_build_index_parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
+    test_sample_build_index_parser.add_argument("--discard-cache", action="store_true")
+    test_sample_build_index_parser.add_argument("--json", action="store_true")
+    test_sample_build_index_parser.set_defaults(func=cmd_test_sample_build_index)
+
+    test_sample_build_parser = subparsers.add_parser("test-sample-build")
+    add_common_config(test_sample_build_parser)
+    test_sample_build_parser.add_argument("--sample-id", required=True)
+    test_sample_build_parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
+    test_sample_build_parser.add_argument("--discard-cache", action="store_true")
+    test_sample_build_parser.add_argument("--json", action="store_true")
+    test_sample_build_parser.set_defaults(func=cmd_test_sample_build)
+
+    user_prompt_set_create_parser = subparsers.add_parser("user-prompt-set-create")
+    add_common_config(user_prompt_set_create_parser)
+    user_prompt_set_create_parser.add_argument("--set-id", required=True)
+    user_prompt_set_create_parser.add_argument("--user-prompts", required=True)
+    user_prompt_set_create_parser.add_argument("--query-prompt", required=True)
+    user_prompt_set_create_parser.add_argument("--json", action="store_true")
+    user_prompt_set_create_parser.set_defaults(func=cmd_user_prompt_set_create)
+
+    user_prompt_set_map_parser = subparsers.add_parser("user-prompt-set-map")
+    add_common_config(user_prompt_set_map_parser)
+    user_prompt_set_map_parser.add_argument("--set-id", required=True)
+    user_prompt_set_map_parser.add_argument("--discard-cache", action="store_true")
+    user_prompt_set_map_parser.add_argument("--json", action="store_true")
+    user_prompt_set_map_parser.set_defaults(func=cmd_user_prompt_set_map)
+
+    user_prompt_set_show_parser = subparsers.add_parser("user-prompt-set-show")
+    add_common_config(user_prompt_set_show_parser)
+    user_prompt_set_show_parser.add_argument("--set-id", required=True)
+    user_prompt_set_show_parser.add_argument("--json", action="store_true")
+    user_prompt_set_show_parser.set_defaults(func=cmd_user_prompt_set_show)
+
+    user_prompt_set_list_parser = subparsers.add_parser("user-prompt-set-list")
+    add_common_config(user_prompt_set_list_parser)
+    user_prompt_set_list_parser.add_argument("--json", action="store_true")
+    user_prompt_set_list_parser.set_defaults(func=cmd_user_prompt_set_list)
+
+    user_prompt_set_read_prompts_parser = subparsers.add_parser("user-prompt-set-read-prompts")
+    add_common_config(user_prompt_set_read_prompts_parser)
+    add_common_page(user_prompt_set_read_prompts_parser)
+    user_prompt_set_read_prompts_parser.add_argument("--set-id", required=True)
+    user_prompt_set_read_prompts_parser.add_argument("--json", action="store_true")
+    user_prompt_set_read_prompts_parser.set_defaults(func=cmd_user_prompt_set_read_prompts)
+
+    user_prompt_set_read_mappings_parser = subparsers.add_parser("user-prompt-set-read-mappings")
+    add_common_config(user_prompt_set_read_mappings_parser)
+    add_common_page(user_prompt_set_read_mappings_parser)
+    user_prompt_set_read_mappings_parser.add_argument("--set-id", required=True)
+    user_prompt_set_read_mappings_parser.add_argument("--json", action="store_true")
+    user_prompt_set_read_mappings_parser.set_defaults(func=cmd_user_prompt_set_read_mappings)
+
+    user_prompt_set_read_errors_parser = subparsers.add_parser("user-prompt-set-read-errors")
+    add_common_config(user_prompt_set_read_errors_parser)
+    add_common_page(user_prompt_set_read_errors_parser)
+    user_prompt_set_read_errors_parser.add_argument("--set-id", required=True)
+    user_prompt_set_read_errors_parser.add_argument("--json", action="store_true")
+    user_prompt_set_read_errors_parser.set_defaults(func=cmd_user_prompt_set_read_errors)
+
+    retrieval_trial_run_parser = subparsers.add_parser("retrieval-trial-run")
+    add_common_config(retrieval_trial_run_parser)
+    retrieval_trial_run_parser.add_argument("--trial-id", required=True)
+    retrieval_trial_run_parser.add_argument("--sample-id", required=True)
+    retrieval_trial_run_parser.add_argument("--user-prompt-set-id", required=True)
+    retrieval_trial_run_parser.add_argument("--json", action="store_true")
+    retrieval_trial_run_parser.set_defaults(func=cmd_retrieval_trial_run)
+
+    retrieval_trial_show_parser = subparsers.add_parser("retrieval-trial-show")
+    add_common_config(retrieval_trial_show_parser)
+    retrieval_trial_show_parser.add_argument("--trial-id", required=True)
+    retrieval_trial_show_parser.add_argument("--json", action="store_true")
+    retrieval_trial_show_parser.set_defaults(func=cmd_retrieval_trial_show)
+
+    retrieval_trial_list_parser = subparsers.add_parser("retrieval-trial-list")
+    add_common_config(retrieval_trial_list_parser)
+    retrieval_trial_list_parser.add_argument("--json", action="store_true")
+    retrieval_trial_list_parser.set_defaults(func=cmd_retrieval_trial_list)
+
+    retrieval_trial_read_results_parser = subparsers.add_parser("retrieval-trial-read-results")
+    add_common_config(retrieval_trial_read_results_parser)
+    add_common_page(retrieval_trial_read_results_parser)
+    retrieval_trial_read_results_parser.add_argument("--trial-id", required=True)
+    retrieval_trial_read_results_parser.add_argument("--json", action="store_true")
+    retrieval_trial_read_results_parser.set_defaults(func=cmd_retrieval_trial_read_results)
+
+    retrieval_trial_read_errors_parser = subparsers.add_parser("retrieval-trial-read-errors")
+    add_common_config(retrieval_trial_read_errors_parser)
+    add_common_page(retrieval_trial_read_errors_parser)
+    retrieval_trial_read_errors_parser.add_argument("--trial-id", required=True)
+    retrieval_trial_read_errors_parser.add_argument("--json", action="store_true")
+    retrieval_trial_read_errors_parser.set_defaults(func=cmd_retrieval_trial_read_errors)
+
     return parser
 
 
@@ -95,6 +260,11 @@ def add_common_config(parser: argparse.ArgumentParser) -> None:
 def add_range(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--start", type=int, default=None)
     parser.add_argument("--end", type=int, default=None)
+
+
+def add_common_page(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--offset", type=int, default=0)
+    parser.add_argument("--limit", type=int, default=BROWSE_DEFAULT_LIMIT)
 
 
 def cmd_preprocess(args: argparse.Namespace) -> int:
@@ -150,6 +320,240 @@ def cmd_serve_mcp(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_test_sample_create(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = create_test_sample(
+        config,
+        sample_id=args.sample_id,
+        sample_size=args.sample_size,
+        seed=args.seed,
+        preprocess_prompt=Path(args.preprocess_prompt),
+    )
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def cmd_test_sample_resample(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = resample_test_sample(
+        config,
+        sample_id=args.sample_id,
+        sample_size=args.sample_size,
+        seed=args.seed,
+    )
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def cmd_test_sample_show(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = read_test_sample(config, args.sample_id)
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def cmd_test_sample_list(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = list_test_samples(config)
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def cmd_test_sample_read_raw(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = read_test_sample_raw(
+        config,
+        args.sample_id,
+        offset=args.offset,
+        limit=args.limit,
+    )
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def cmd_test_sample_read_preprocessed(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = read_test_sample_preprocessed(
+        config,
+        args.sample_id,
+        offset=args.offset,
+        limit=args.limit,
+    )
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def cmd_test_sample_read_errors(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = read_test_sample_errors(
+        config,
+        args.sample_id,
+        offset=args.offset,
+        limit=args.limit,
+    )
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def cmd_test_sample_preprocess(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = preprocess_test_sample(
+        config,
+        args.sample_id,
+        concurrency=args.concurrency,
+        discard_cache=args.discard_cache,
+    )
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def cmd_test_sample_build_index(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = build_test_sample_index(
+        config,
+        args.sample_id,
+        concurrency=args.concurrency,
+        discard_cache=args.discard_cache,
+    )
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def cmd_test_sample_build(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = build_test_sample(
+        config,
+        args.sample_id,
+        concurrency=args.concurrency,
+        discard_cache=args.discard_cache,
+    )
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def cmd_user_prompt_set_create(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = create_user_prompt_set(
+        config,
+        set_id=args.set_id,
+        user_prompts_path=Path(args.user_prompts),
+        query_prompt_path=Path(args.query_prompt),
+    )
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def cmd_user_prompt_set_map(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = map_user_prompt_set(
+        config,
+        args.set_id,
+        discard_cache=args.discard_cache,
+    )
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def cmd_user_prompt_set_show(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = read_user_prompt_set(config, args.set_id)
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def cmd_user_prompt_set_list(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = list_user_prompt_sets(config)
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def cmd_user_prompt_set_read_prompts(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = read_user_prompt_set_prompts(
+        config,
+        args.set_id,
+        offset=args.offset,
+        limit=args.limit,
+    )
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def cmd_user_prompt_set_read_mappings(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = read_user_prompt_set_mappings(
+        config,
+        args.set_id,
+        offset=args.offset,
+        limit=args.limit,
+    )
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def cmd_user_prompt_set_read_errors(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = read_user_prompt_set_errors(
+        config,
+        args.set_id,
+        offset=args.offset,
+        limit=args.limit,
+    )
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def cmd_retrieval_trial_run(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = run_retrieval_trial(
+        config,
+        trial_id=args.trial_id,
+        sample_id=args.sample_id,
+        user_prompt_set_id=args.user_prompt_set_id,
+    )
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def cmd_retrieval_trial_show(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = read_retrieval_trial(config, args.trial_id)
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def cmd_retrieval_trial_list(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = list_retrieval_trials(config)
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def cmd_retrieval_trial_read_results(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = read_retrieval_trial_results(
+        config,
+        args.trial_id,
+        offset=args.offset,
+        limit=args.limit,
+    )
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def cmd_retrieval_trial_read_errors(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = read_retrieval_trial_errors(
+        config,
+        args.trial_id,
+        offset=args.offset,
+        limit=args.limit,
+    )
+    print_output(result, as_json=args.json)
+    return 0
+
+
 def print_output(result: dict[str, Any], *, as_json: bool) -> None:
     if as_json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -158,87 +562,6 @@ def print_output(result: dict[str, Any], *, as_json: bool) -> None:
         if key != "status":
             print(f"{key}: {value}")
 
-
-def build_index(
-    config: Any,
-    *,
-    start: int | None = None,
-    end: int | None = None,
-    concurrency: int = DEFAULT_CONCURRENCY,
-    model_client: Any | None = None,
-) -> dict[str, Any]:
-    raw_dataset = load_raw_dataset(config.raw_profiles_path)
-    preprocessed = load_preprocessed_map(config)
-    lower = 0 if start is None else start
-    upper = len(raw_dataset.rows) if end is None else end
-    selected = []
-    for source_row_index, raw_profile in raw_dataset.rows:
-        if not (lower <= source_row_index < upper):
-            continue
-        user_id = int(raw_profile["user_id"])
-        if user_id not in preprocessed:
-            raise CandidateSearchError(
-                "PREPROCESSED_PROFILE_NOT_FOUND",
-                "requested raw row has no preprocessed profile",
-                user_id=user_id,
-                source_row_index=source_row_index,
-            )
-        record = preprocessed[user_id]
-        if record.get("preprocess_schema_version") != PREPROCESS_SCHEMA_VERSION:
-            raise CandidateSearchError(
-                "PREPROCESS_AND_INDEX_NOT_BUILT",
-                "preprocessed profile version is not usable",
-                user_id=user_id,
-            )
-        if record.get("raw_profile_hash") != canonical_hash(raw_profile):
-            raise CandidateSearchError(
-                "RAW_PROFILE_HASH_MISMATCH",
-                "raw profile changed after preprocess",
-                user_id=user_id,
-            )
-        selected.append(record)
-
-    client = model_client or DashScopeModelClient(config)
-
-    def worker(record: dict[str, Any]) -> dict[str, Any]:
-        profile = record["preprocessed_profile"]
-        texts = profile["embedding_search_texts"]
-        dimensions = sorted(SEARCHABLE_DIMENSIONS)
-        vectors = client.embed_texts([texts[dimension] for dimension in dimensions])
-        if len(vectors) != len(dimensions):
-            raise RuntimeError("embedding model returned unexpected vector count")
-        return {
-            "user_id": int(record["user_id"]),
-            "source_row_index": record["source_row_index"],
-            "embedding_index_version": EMBEDDING_INDEX_VERSION,
-            "search_text_hash": search_text_hash(profile),
-            "vectors": {
-                dimension: vector
-                for dimension, vector in zip(dimensions, vectors)
-            },
-        }
-
-    successes, errors = parallel_map_with_retries(
-        selected,
-        worker,
-        concurrency=concurrency,
-        attempts=3,
-    )
-    merge_write_jsonl_by_user_id(config.processed_dir / EMBEDDINGS_FILE, successes)
-    write_latest_errors(config.processed_dir / INDEX_ERRORS_FILE, errors)
-    status = _write_status(config)
-    if errors:
-        raise CandidateSearchError(
-            "BUILD_INDEX_FAILED",
-            "some embeddings failed",
-            failed_count=len(errors),
-            succeeded_count=len(successes),
-        )
-    return {
-        "indexed_count": len(successes),
-        "failed_count": 0,
-        "status": status,
-    }
 
 
 def serve_mcp(config: Any) -> None:
@@ -291,8 +614,8 @@ class MinimalMcpServer:
             return {
                 "resources": [
                     {
-                        "uri": "candidate://query-guide",
-                        "name": "Candidate query guide",
+                        "uri": "candidate://help",
+                        "name": "Candidate search help",
                         "mimeType": "text/markdown",
                     },
                     {
@@ -332,8 +655,8 @@ class MinimalMcpServer:
         if uri == "candidate://index-status":
             text = json.dumps(get_index_status(self.config), ensure_ascii=False, indent=2)
             mime = "application/json"
-        elif uri == "candidate://query-guide":
-            text = query_guide_text()
+        elif uri == "candidate://help":
+            text = help_text()
             mime = "text/markdown"
         else:
             raise ValueError(f"Unsupported resource: {uri}")
@@ -348,37 +671,10 @@ class MinimalMcpServer:
         }
 
 
-def search_tool_schema() -> dict[str, Any]:
-    return {
-        "name": "search_candidates",
-        "description": "Search candidates with a complete QueryPlan.",
-        "inputSchema": {
-            "type": "object",
-            "required": ["query_plan"],
-            "properties": {
-                "query_plan": {"type": "object"},
-                "options": {
-                    "type": "object",
-                    "properties": {"top_k": {"type": "integer", "minimum": 1, "maximum": 75}},
-                },
-            },
-        },
-    }
-
-
-def query_guide_text() -> str:
-    return """# Candidate Search Query Guide
-
-Use `search_candidates` with a complete `query_plan`.
-
-`hard_constraints` may only use: `years_of_experience`, `highest_degree_level`, `role_family`, `seniority_level`, `management_scope`, `industries`, `is_currently_working`.
-
-`weighted_soft_preferences` must contain at least one item. Write `text` as concrete work content, not just a title or keyword. Use negative `weight` for "avoid X" needs.
-
-Read `candidate://index-status` before assuming the index is available or full. If `index_status` is `partial`, tell the user results are from a partial index.
-
-Explain candidate facts only from `results[].raw_profile`. Use `soft_preference_scores` only to explain sorting.
-"""
+def help_text() -> str:
+    mcp_guide = MCP_GUIDE_FILE.read_text(encoding="utf-8").strip()
+    query_guide = QUERY_GUIDE_FILE.read_text(encoding="utf-8").strip()
+    return f"{mcp_guide}\n\n---\n\n{query_guide}\n"
 
 
 def read_mcp_message(stream: Any) -> dict[str, Any] | None:

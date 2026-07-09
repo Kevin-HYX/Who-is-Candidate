@@ -63,7 +63,8 @@ MANAGEMENT_SCOPE_RANK = {
 }
 
 CONFIG_REQUIRED_FIELDS = (
-    ("dashscope", "api_key"),
+    ("openai", "api_key"),
+    ("openai", "base_url"),
     ("models", "preprocess"),
     ("models", "embedding"),
     ("paths", "raw_profiles"),
@@ -75,5 +76,6 @@ EMBEDDINGS_FILE = "embeddings.jsonl"
 STATUS_FILE = "status.json"
 PREPROCESS_ERRORS_FILE = "preprocess_errors.jsonl"
 INDEX_ERRORS_FILE = "index_errors.jsonl"
-PREPROCESS_PROMPT_FILE = PROJECT_ROOT / "prompts" / "preprocess_profile.md"
-
+PREPROCESS_PROMPT_FILE = PROJECT_ROOT / "prompts" / "preprosess.md"
+MCP_GUIDE_FILE = PROJECT_ROOT / "prompts" / "mcp-guide.md"
+QUERY_GUIDE_FILE = PROJECT_ROOT / "prompts" / "query-guide.md"

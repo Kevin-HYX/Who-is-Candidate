@@ -7,7 +7,7 @@
 - 优先构建 MCP Server，同时保留 CLI。
 - 先完成 CLI 能力，再把查询能力封装成 MCP。
 - CLI 负责状态改变：`preprocess`、`build-index`。
-- MCP 只负责查询：一个工具 `search_candidates`，两个只读资源 `candidate://query-guide` 和 `candidate://index-status`。
+- MCP 只负责查询：一个工具 `search_candidates`，两个只读资源 `candidate://help` 和 `candidate://index-status`。
 - Search Tool 返回简单检索元信息、软偏好分数和原始 profile；自然语言理解与候选人解释由未来 Agent 完成。
 
 ## 技术选型
@@ -15,8 +15,8 @@
 - 语言：Python。
 - 预处理：Qwen chat 模型，模型名必须由 `candidate-search.toml` 的 `models.preprocess` 提供；模板建议值为 `qwen-plus`。
 - 向量化：Qwen embedding 模型，模型名必须由 `candidate-search.toml` 的 `models.embedding` 提供；模板建议值为 `text-embedding-v3`。
-- 调用方式：默认官方 `dashscope` SDK。
-- 配置：使用项目根目录的本地 TOML 配置文件 `candidate-search.toml` 保存 API Key、模型名和路径等运行参数；该文件不提交，提交 `candidate-search.example.toml` 作为填写模板。
+- 调用方式：使用 OpenAI 兼容 HTTP 接口，通过 `openai` Python SDK 调用；`base_url` 必须由本地配置显式提供，不做默认 endpoint 兜底。
+- 配置：使用项目根目录的本地 TOML 配置文件 `candidate-search.toml` 保存 OpenAI 兼容 API Key、base_url、模型名和路径等运行参数；该文件不提交，提交 `candidate-search.example.toml` 作为填写模板。
 - 本地缓存：文件制，按千级候选人规模设计，不引入数据库、向量数据库或 ANN 服务。
 
 ## 目录结构
@@ -25,14 +25,17 @@
 
 ```text
 src/
-  main.py          # CLI 入口 + MCP server 入口
+  main.py          # CLI adapter + MCP server adapter
+  evaluation.py    # Evaluation Loop：Test Sample、User Prompt Set、Retrieval Trial、Browse Page
   constants.py     # 硬筛白名单、枚举、搜索维度、版本号、配置字段名
-  schemas.py       # QueryPlan、SearchResult、预处理结构、错误返回 schema
+  schemas.py       # QueryPlan、SearchResult、工具 schema、预处理结构、错误返回 schema
   preprocess.py    # 预处理：raw profile -> preprocessed profile
   retrieval.py     # embedding、索引构建、缓存加载、硬过滤、召回、排序
 
 prompts/
-  preprocess_profile.md         # 预处理 LLM prompt，属于 preprocess.py 的内部实现资源
+  preprosess.md                 # 预处理 LLM prompt，属于 preprocess.py 的内部实现资源
+  mcp-guide.md                  # MCP candidate://help 的第一段 Markdown 来源
+  query-guide.md                # candidate://help 的第二段；离线调试 User Prompt -> QuerySchema/QueryPlan 的生成提示词
 
 data/
   desensitization_profiles/
@@ -44,12 +47,44 @@ data/
     preprocess_errors.jsonl
     index_errors.jsonl
 
+test/
+  data/
+    prompts/
+      preprocess_*.md             # Agent 自行管理版本命名的可复用预处理 prompt
+      query_*.md                  # Agent 自行管理版本命名的可复用需求映射 prompt
+    samples/
+      <sample_id>/
+        sample.json
+        raw_profiles.jsonl
+        sample_index.json
+        prompt_snapshot/
+          preprosess.md
+        preprocessed_profiles.jsonl
+        embeddings.jsonl
+        status.json
+        preprocess_errors.jsonl
+        index_errors.jsonl
+    user_prompt_sets/
+      <set_id>/
+        user_prompts.jsonl
+        prompt_snapshot/
+          query.md
+        tool_schema.json
+        generated_query_plans.jsonl
+        mapping_errors.jsonl
+        status.json
+    retrieval_trials/
+      <trial_id>/
+        search_results.jsonl
+        retrieval_errors.jsonl
+        status.json
+
 candidate-search.example.toml   # 可提交的本地配置模板
 candidate-search.toml           # 本地真实配置，包含 API Key，必须被 .gitignore 忽略
-requirements.txt                # 运行时依赖，包含 dashscope SDK
+requirements.txt                # 运行时依赖，包含 openai SDK
 ```
 
-`preprocess.py` 和 `retrieval.py` 可以各自接近 2000 行以内；不为了拆分而拆分。
+`evaluation.py`、`preprocess.py` 和 `retrieval.py` 可以各自接近 2000 行以内；不为了拆分而拆分。`main.py` 只作为 CLI/MCP adapter，不承载 Evaluation Loop 的实现细节。
 
 ## CLI 命令
 
@@ -58,6 +93,24 @@ python -m src.main preprocess --start 0 --end 20 --concurrency 3
 python -m src.main build-index --start 0 --end 20 --concurrency 3
 python -m src.main search --query query.json --top-k 20 --json
 python -m src.main serve-mcp
+python -m src.main test-sample-create --sample-id sample_a --sample-size 50 --seed 123 --preprocess-prompt test/data/prompts/preprocess_v1.md --json
+python -m src.main test-sample-preprocess --sample-id sample_a --json
+python -m src.main test-sample-build-index --sample-id sample_a --json
+python -m src.main test-sample-build --sample-id sample_a --json
+python -m src.main test-sample-list --json
+python -m src.main test-sample-read-raw --sample-id sample_a --limit 20 --offset 0 --json
+python -m src.main test-sample-read-preprocessed --sample-id sample_a --limit 20 --offset 0 --json
+python -m src.main test-sample-read-errors --sample-id sample_a --limit 20 --offset 0 --json
+python -m src.main user-prompt-set-create --set-id set_a --user-prompts user_prompts.jsonl --query-prompt test/data/prompts/query_v1.md --json
+python -m src.main user-prompt-set-map --set-id set_a --json
+python -m src.main user-prompt-set-list --json
+python -m src.main user-prompt-set-read-prompts --set-id set_a --limit 20 --offset 0 --json
+python -m src.main user-prompt-set-read-mappings --set-id set_a --limit 20 --offset 0 --json
+python -m src.main user-prompt-set-read-errors --set-id set_a --limit 20 --offset 0 --json
+python -m src.main retrieval-trial-run --trial-id trial_a --sample-id sample_a --user-prompt-set-id set_a --json
+python -m src.main retrieval-trial-list --json
+python -m src.main retrieval-trial-read-results --trial-id trial_a --limit 20 --offset 0 --json
+python -m src.main retrieval-trial-read-errors --trial-id trial_a --limit 20 --offset 0 --json
 ```
 
 - `--start` / `--end` 使用原始 JSONL 的 0-based 左闭右开行号区间。
@@ -65,10 +118,19 @@ python -m src.main serve-mcp
 - `build-index --start/--end` 也按原始行号选取对应的预处理记录；如果缺少预处理记录，报错，不自动预处理。
 - CLI 命令支持 `--config <path>` 覆盖默认的 `candidate-search.toml`。`serve-mcp` 作为本地启动命令也通过 CLI 读取配置。
 - 缺失配置文件或配置必填项时，CLI 命令直接失败；`serve-mcp` 不启动。配置缺失不是 `candidate://index-status` 的状态，也不作为 MCP tool/resource 的业务错误返回。
-- `candidate-search.example.toml` 中的字段均为必填字段：`dashscope.api_key`、`models.preprocess`、`models.embedding`、`paths.raw_profiles`、`paths.processed_dir`。空字符串按缺失处理。
-- `search` 和 MCP `search_candidates` 也需要 `dashscope.api_key` 与 `models.embedding`，因为查询侧 soft preference 文本要在检索时实时生成向量。
+- `candidate-search.example.toml` 中的字段均为必填字段：`openai.api_key`、`openai.base_url`、`models.preprocess`、`models.embedding`、`paths.raw_profiles`、`paths.processed_dir`。空字符串按缺失处理。
+- `search` 和 MCP `search_candidates` 也需要 `openai.api_key`、`openai.base_url` 与 `models.embedding`，因为查询侧 soft preference 文本要在检索时实时生成向量。
 - CLI 构建命令默认输出人类可读摘要，支持 `--json`。
 - CLI `search` 与 MCP `search_candidates` 使用同一套返回 schema。
+- 评测闭环命令只属于 CLI，不暴露为 MCP build/query 资源。评测闭环产物固定存放在配置文件同目录的 `test/data/`，按 `samples/`、`user_prompt_sets/`、`retrieval_trials/`、`prompts/` 四个维度分开存储，并通过各自 id 切换版本。
+- Test Sample 支持分步预处理、分步建索引和一键 build；User Prompt Set 支持单独调试 User Prompt 到 QuerySchema/QueryPlan 的映射；Retrieval Trial 只接受 ready 的 Test Sample 和 ready 的 User Prompt Set。
+- 两个调用大模型 API 的生成阶段都使用 Generation Cache：Test Sample 预处理和 User Prompt Set 映射默认跳过前置条件未变的成功项，`--discard-cache` 可强制重跑。
+- 构建和检索代码通过 Build Workspace 读取原始 JSONL 并写入产物目录。生产默认 Build Workspace 来自 `candidate-search.toml`；Test Sample 使用 `test/data/samples/<sample_id>/` 作为自己的 Build Workspace，不通过伪造或重定向 `RuntimeConfig` 来运行。
+- `test/data/prompts/` 只放闭环调优用的可复用 preprocess/query prompt artifacts。创建 Sample 或 User Prompt Set 时，系统把指定 prompt 复制到对象内部 `prompt_snapshot/`，后续运行只读 snapshot。
+- Evaluation Object Browse Interface 只读，不管理 `test/data/prompts/`。`list` 命令只列当前 `test/data` 下已有对象，目录不存在则返回空列表，并按 `updated_at` 倒序返回。
+- `read-*` 命令统一返回分页 envelope：`object_type`、`object_id`、`artifact`、`artifact_status`、`total_count`、`offset`、`limit`、`returned_count`、`items`。默认 `limit=20`，最大 `limit=200`，`offset>=0`。
+- 对象存在但 artifact 文件尚未生成时，`read-*` 返回 `artifact_status="missing"` 和空 `items`；对象 id 不存在、分页参数非法、artifact 文件损坏时返回结构化错误。
+- `test-sample-read-errors` 聚合读取 `preprocess_errors.jsonl` 和 `index_errors.jsonl`，并在每条错误上增加 `error_source`。
 
 ## 缓存与版本
 
@@ -137,7 +199,7 @@ MCP 的 `index-status` 只暴露可用状态和覆盖范围，不暴露具体失
 
 核心规则：
 
-- 预处理 prompt 放在 `prompts/preprocess_profile.md`，不硬编码在 Python 中；它属于 `preprocess.py` 的内部实现资源，不暴露给 CLI/MCP 调用方。
+- 预处理 prompt 放在 `prompts/preprosess.md`，不硬编码在 Python 中；它属于 `preprocess.py` 的内部实现资源，不暴露给 CLI/MCP 调用方。
 - 如果 prompt 语义变化导致原有预处理缓存不再可信，必须升级 `preprocess_schema_version`。
 - 能用公式算的字段不用 LLM 算，例如总经验年限、最高学历、当前任职时长、平均任职时长。
 - LLM 只处理需要判断、归一、转写的字段，例如 `role_family`、`seniority_level`、`management_scope`、`industries`、检索文本、风险文本。
@@ -193,8 +255,11 @@ MCP 的 `index-status` 只暴露可用状态和覆盖范围，不暴露具体失
 MCP 第一版：
 
 - Tool：`search_candidates`
-- Resource：`candidate://query-guide`
+- Resource：`candidate://help`
 - Resource：`candidate://index-status`
+
+`prompts/query-guide.md` 不作为单独 MCP resource 暴露。它用于闭环评测里单独调试 User Prompt 到 QuerySchema/QueryPlan 的生成效果，因为当前不能在完整 Agent 环境中直接测试这一环。
+`candidate://help` 返回时先拼接 `prompts/mcp-guide.md`，再拼接 `prompts/query-guide.md`。
 
 MCP 不提供：
 

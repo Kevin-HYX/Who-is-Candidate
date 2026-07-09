@@ -307,10 +307,10 @@ MCP 资源只做只读说明和状态查询，不触发构建。
 
 | 资源 | 用途 |
 |---|---|
-| `candidate://query-guide` | Agent 的使用说明书：QueryPlan schema、搜索词书写规则、示例、SearchResult 解读方式 |
+| `candidate://help` | Agent 的使用说明书：QueryPlan schema、搜索词书写规则、示例、SearchResult 解读方式 |
 | `candidate://index-status` | 当前原始数据、预处理结构和索引覆盖状态；状态来自 `data/processed/status.json` |
 
-`candidate://query-guide` 不硬编码实时覆盖数字。Agent 每次需要判断是否已建立预处理或索引时，必须读取 `candidate://index-status`。
+`candidate://help` 不硬编码实时覆盖数字。Agent 每次需要判断是否已建立预处理或索引时，必须读取 `candidate://index-status`。
 
 MCP 资源不得返回本地配置路径、API Key、模型名或其它本地环境信息。
 

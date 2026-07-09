@@ -1,3 +1,8 @@
 # Local runtime configuration with secrets.
 candidate-search.toml
 
+# Local generated preprocess, embedding, and evaluation artifacts.
+data/processed/
+test/data/samples/
+test/data/user_prompt_sets/
+test/data/retrieval_trials/

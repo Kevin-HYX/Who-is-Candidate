@@ -13,34 +13,49 @@ from .constants import (
     SEARCHABLE_DIMENSIONS,
 )
 from .retrieval import (
-    DashScopeModelClient,
+    OpenAICompatibleModelClient,
     canonical_hash,
+    load_preprocessed_map,
     load_raw_dataset,
     merge_write_jsonl_by_user_id,
     parallel_map_with_retries,
     write_latest_errors,
     write_status,
 )
-from .schemas import CandidateSearchError, RuntimeConfig
+from .schemas import BuildWorkspace, CandidateSearchError, RuntimeConfig
 
 
 def preprocess_profiles(
     config: RuntimeConfig,
     *,
+    workspace: BuildWorkspace | None = None,
     start: int | None = None,
     end: int | None = None,
     concurrency: int = DEFAULT_CONCURRENCY,
     model_client: Any | None = None,
+    prompt_path: Path | None = None,
+    discard_cache: bool = False,
 ) -> dict[str, Any]:
-    raw_dataset = load_raw_dataset(config.raw_profiles_path)
+    build_workspace = workspace or config.build_workspace()
+    raw_dataset = load_raw_dataset(build_workspace.raw_profiles_path)
     selected = _select_rows(raw_dataset.rows, start, end)
-    prompt = PREPROCESS_PROMPT_FILE.read_text(encoding="utf-8")
-    client = model_client or DashScopeModelClient(config)
+    prompt_file = prompt_path or PREPROCESS_PROMPT_FILE
+    prompt = prompt_file.read_text(encoding="utf-8")
+    client = model_client or OpenAICompatibleModelClient(config)
+    existing = load_preprocessed_map(build_workspace, require_file=False)
 
+    skipped = []
     items = [
         {"source_row_index": source_row_index, "raw_profile": raw_profile}
         for source_row_index, raw_profile in selected
+        if discard_cache or not _has_current_preprocess_cache(existing, raw_profile)
     ]
+    if not discard_cache:
+        skipped = [
+            raw_profile
+            for _, raw_profile in selected
+            if _has_current_preprocess_cache(existing, raw_profile)
+        ]
 
     def worker(item: dict[str, Any]) -> dict[str, Any]:
         raw_profile = item["raw_profile"]
@@ -62,9 +77,9 @@ def preprocess_profiles(
         concurrency=concurrency,
         attempts=3,
     )
-    merge_write_jsonl_by_user_id(config.processed_dir / PROCESSED_PROFILES_FILE, successes)
-    write_latest_errors(config.processed_dir / PREPROCESS_ERRORS_FILE, errors)
-    status = write_status(config)
+    merge_write_jsonl_by_user_id(build_workspace.processed_dir / PROCESSED_PROFILES_FILE, successes)
+    write_latest_errors(build_workspace.processed_dir / PREPROCESS_ERRORS_FILE, errors)
+    status = write_status(build_workspace)
     if errors:
         raise CandidateSearchError(
             "PREPROCESS_FAILED",
@@ -74,9 +89,24 @@ def preprocess_profiles(
         )
     return {
         "processed_count": len(successes),
+        "skipped_count": len(skipped),
         "failed_count": 0,
         "status": status,
     }
+
+
+def _has_current_preprocess_cache(
+    existing: dict[int, dict[str, Any]],
+    raw_profile: dict[str, Any],
+) -> bool:
+    user_id = int(raw_profile["user_id"])
+    record = existing.get(user_id)
+    if not record:
+        return False
+    return (
+        record.get("preprocess_schema_version") == PREPROCESS_SCHEMA_VERSION
+        and record.get("raw_profile_hash") == canonical_hash(raw_profile)
+    )
 
 
 def _select_rows(

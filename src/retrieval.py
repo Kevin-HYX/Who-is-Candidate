@@ -7,11 +7,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
-from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Protocol
 
 from .constants import (
+    DEFAULT_CONCURRENCY,
     EMBEDDING_INDEX_VERSION,
     EMBEDDINGS_FILE,
     HARD_CONSTRAINT_FIELDS,
@@ -24,7 +24,7 @@ from .constants import (
     SENIORITY_RANK,
     STATUS_FILE,
 )
-from .schemas import CandidateSearchError, RuntimeConfig, validate_search_request
+from .schemas import BuildWorkspace, CandidateSearchError, RuntimeConfig, validate_search_request
 
 
 class ModelClient(Protocol):
@@ -35,29 +35,24 @@ class ModelClient(Protocol):
         ...
 
 
-class DashScopeModelClient:
+class OpenAICompatibleModelClient:
     def __init__(self, config: RuntimeConfig) -> None:
         self.config = config
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        dashscope = _load_dashscope()
-        dashscope.api_key = self.config.api_key
-        response = dashscope.TextEmbedding.call(
+        client = self._client()
+        response = client.embeddings.create(
             model=self.config.embedding_model,
             input=texts,
-            output_type="dense",
         )
-        _raise_for_dashscope_response(response, "embedding")
-        embeddings = response.output.get("embeddings", [])
-        embeddings = sorted(embeddings, key=lambda item: item.get("text_index", 0))
-        return [item["embedding"] for item in embeddings]
+        embeddings = sorted(response.data, key=lambda item: item.index)
+        return [list(item.embedding) for item in embeddings]
 
     def preprocess_profile(self, prompt: str, raw_profile: dict[str, Any]) -> dict[str, Any]:
-        dashscope = _load_dashscope()
-        dashscope.api_key = self.config.api_key
-        response = dashscope.Generation.call(
+        client = self._client()
+        response = client.chat.completions.create(
             model=self.config.preprocess_model,
             messages=[
                 {"role": "system", "content": prompt},
@@ -66,29 +61,49 @@ class DashScopeModelClient:
                     "content": json.dumps(raw_profile, ensure_ascii=False, sort_keys=True),
                 },
             ],
-            result_format="message",
         )
-        _raise_for_dashscope_response(response, "preprocess")
-        content = response.output["choices"][0]["message"]["content"]
+        content = response.choices[0].message.content
+        if not content:
+            raise ValueError("LLM output is empty")
         return _parse_json_content(content)
 
+    def generate_query_plan(
+        self,
+        query_guide: str,
+        tool_schema: dict[str, Any],
+        user_prompt: str,
+    ) -> dict[str, Any]:
+        client = self._client()
+        response = client.chat.completions.create(
+            model=self.config.preprocess_model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": query_guide
+                    + "\n\nTool schema:\n"
+                    + json.dumps(tool_schema, ensure_ascii=False, sort_keys=True),
+                },
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+        content = response.choices[0].message.content
+        if not content:
+            raise ValueError("LLM output is empty")
+        return _parse_json_content(content)
 
-def _load_dashscope() -> Any:
+    def _client(self) -> Any:
+        openai = _load_openai()
+        return openai.OpenAI(api_key=self.config.api_key, base_url=self.config.base_url)
+
+
+def _load_openai() -> Any:
     try:
-        import dashscope  # type: ignore[import-not-found]
+        import openai  # type: ignore[import-not-found]
     except ImportError as exc:
         raise RuntimeError(
-            "缺少 dashscope SDK。请先安装依赖: pip install dashscope"
+            "缺少 openai SDK。请先安装依赖: pip install openai"
         ) from exc
-    return dashscope
-
-
-def _raise_for_dashscope_response(response: Any, operation: str) -> None:
-    status_code = getattr(response, "status_code", None)
-    if status_code == HTTPStatus.OK or status_code == 200:
-        return
-    message = getattr(response, "message", None) or str(response)
-    raise RuntimeError(f"DashScope {operation} call failed: {message}")
+    return openai
 
 
 def _parse_json_content(content: str) -> dict[str, Any]:
@@ -113,14 +128,22 @@ class RawDataset:
     row_by_user_id: dict[int, int]
 
 
+def _as_workspace(workspace: BuildWorkspace | RuntimeConfig) -> BuildWorkspace:
+    if isinstance(workspace, BuildWorkspace):
+        return workspace
+    return workspace.build_workspace()
+
+
 def search_candidates(
     config: RuntimeConfig,
     query_plan: dict[str, Any],
     options: dict[str, Any] | None = None,
     model_client: ModelClient | None = None,
+    workspace: BuildWorkspace | None = None,
 ) -> dict[str, Any]:
+    build_workspace = workspace or config.build_workspace()
     request = validate_search_request(query_plan, options)
-    status = read_status(config)
+    status = read_status(build_workspace)
     if status is None:
         raise CandidateSearchError(
             "PREPROCESS_AND_INDEX_NOT_BUILT",
@@ -137,16 +160,16 @@ def search_candidates(
             "search index is not built",
         )
 
-    raw_dataset = load_raw_dataset(config.raw_profiles_path)
-    preprocessed = load_preprocessed_map(config)
-    embeddings = load_embedding_map(config)
+    raw_dataset = load_raw_dataset(build_workspace.raw_profiles_path)
+    preprocessed = load_preprocessed_map(build_workspace)
+    embeddings = load_embedding_map(build_workspace)
     indexed_records = _usable_embedding_records(embeddings)
     if not indexed_records:
         raise CandidateSearchError("SEARCH_INDEX_NOT_BUILT", "search index is not built")
 
     _validate_cache_consistency(raw_dataset, preprocessed, indexed_records)
 
-    client = model_client or DashScopeModelClient(config)
+    client = model_client or OpenAICompatibleModelClient(config)
     preferences = request.query_plan["weighted_soft_preferences"]
     query_vectors = client.embed_texts([item["text"] for item in preferences])
     if len(query_vectors) != len(preferences):
@@ -205,8 +228,9 @@ def search_candidates(
     }
 
 
-def get_index_status(config: RuntimeConfig) -> dict[str, Any]:
-    status = read_status(config)
+def get_index_status(config: RuntimeConfig, workspace: BuildWorkspace | None = None) -> dict[str, Any]:
+    build_workspace = workspace or config.build_workspace()
+    status = read_status(build_workspace)
     if status is None:
         return {
             "preprocess_status": "missing",
@@ -220,18 +244,20 @@ def get_index_status(config: RuntimeConfig) -> dict[str, Any]:
     return status
 
 
-def read_status(config: RuntimeConfig) -> dict[str, Any] | None:
-    path = config.processed_dir / STATUS_FILE
+def read_status(workspace: BuildWorkspace | RuntimeConfig) -> dict[str, Any] | None:
+    build_workspace = _as_workspace(workspace)
+    path = build_workspace.processed_dir / STATUS_FILE
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def write_status(config: RuntimeConfig) -> dict[str, Any]:
-    config.processed_dir.mkdir(parents=True, exist_ok=True)
-    raw_count = _count_jsonl(config.raw_profiles_path)
-    preprocessed = load_preprocessed_map(config, require_file=False)
-    embeddings = load_embedding_map(config, require_file=False)
+def write_status(workspace: BuildWorkspace | RuntimeConfig) -> dict[str, Any]:
+    build_workspace = _as_workspace(workspace)
+    build_workspace.processed_dir.mkdir(parents=True, exist_ok=True)
+    raw_count = _count_jsonl(build_workspace.raw_profiles_path)
+    preprocessed = load_preprocessed_map(build_workspace, require_file=False)
+    embeddings = load_embedding_map(build_workspace, require_file=False)
     preprocessed_rows = [
         record.get("source_row_index")
         for record in preprocessed.values()
@@ -253,7 +279,7 @@ def write_status(config: RuntimeConfig) -> dict[str, Any]:
         "source_ranges": merge_source_ranges(indexed_rows),
         "updated_at": datetime.now(UTC).isoformat(),
     }
-    _write_json(config.processed_dir / STATUS_FILE, status)
+    _write_json(build_workspace.processed_dir / STATUS_FILE, status)
     return status
 
 
@@ -290,10 +316,11 @@ def load_raw_dataset(path: Path) -> RawDataset:
 
 
 def load_preprocessed_map(
-    config: RuntimeConfig,
+    workspace: BuildWorkspace | RuntimeConfig,
     require_file: bool = True,
 ) -> dict[int, dict[str, Any]]:
-    path = config.processed_dir / PROCESSED_PROFILES_FILE
+    build_workspace = _as_workspace(workspace)
+    path = build_workspace.processed_dir / PROCESSED_PROFILES_FILE
     if not path.exists():
         if require_file:
             raise CandidateSearchError(
@@ -305,10 +332,11 @@ def load_preprocessed_map(
 
 
 def load_embedding_map(
-    config: RuntimeConfig,
+    workspace: BuildWorkspace | RuntimeConfig,
     require_file: bool = True,
 ) -> dict[int, dict[str, Any]]:
-    path = config.processed_dir / EMBEDDINGS_FILE
+    build_workspace = _as_workspace(workspace)
+    path = build_workspace.processed_dir / EMBEDDINGS_FILE
     if not path.exists():
         if require_file:
             raise CandidateSearchError("SEARCH_INDEX_NOT_BUILT", "search index is not built")
@@ -660,6 +688,104 @@ def _write_json(path: Path, value: dict[str, Any]) -> None:
     os.replace(temp, path)
 
 
+def build_index(
+    config: RuntimeConfig,
+    *,
+    workspace: BuildWorkspace | None = None,
+    start: int | None = None,
+    end: int | None = None,
+    concurrency: int = DEFAULT_CONCURRENCY,
+    model_client: Any | None = None,
+    discard_cache: bool = False,
+) -> dict[str, Any]:
+    build_workspace = workspace or config.build_workspace()
+    raw_dataset = load_raw_dataset(build_workspace.raw_profiles_path)
+    preprocessed = load_preprocessed_map(build_workspace)
+    lower = 0 if start is None else start
+    upper = len(raw_dataset.rows) if end is None else end
+    selected = []
+    embeddings = load_embedding_map(build_workspace, require_file=False)
+    skipped_count = 0
+    for source_row_index, raw_profile in raw_dataset.rows:
+        if not (lower <= source_row_index < upper):
+            continue
+        user_id = int(raw_profile["user_id"])
+        if user_id not in preprocessed:
+            raise CandidateSearchError(
+                "PREPROCESSED_PROFILE_NOT_FOUND",
+                "requested raw row has no preprocessed profile",
+                user_id=user_id,
+                source_row_index=source_row_index,
+            )
+        record = preprocessed[user_id]
+        if record.get("preprocess_schema_version") != PREPROCESS_SCHEMA_VERSION:
+            raise CandidateSearchError(
+                "PREPROCESS_AND_INDEX_NOT_BUILT",
+                "preprocessed profile version is not usable",
+                user_id=user_id,
+            )
+        if record.get("raw_profile_hash") != canonical_hash(raw_profile):
+            raise CandidateSearchError(
+                "RAW_PROFILE_HASH_MISMATCH",
+                "raw profile changed after preprocess",
+                user_id=user_id,
+            )
+        current_search_text_hash = search_text_hash(record["preprocessed_profile"])
+        cached_embedding = embeddings.get(user_id)
+        if (
+            not discard_cache
+            and cached_embedding
+            and cached_embedding.get("embedding_index_version") == EMBEDDING_INDEX_VERSION
+            and cached_embedding.get("search_text_hash") == current_search_text_hash
+        ):
+            skipped_count += 1
+            continue
+        selected.append(record)
+
+    client = model_client or OpenAICompatibleModelClient(config)
+
+    def worker(record: dict[str, Any]) -> dict[str, Any]:
+        profile = record["preprocessed_profile"]
+        texts = profile["embedding_search_texts"]
+        dimensions = sorted(SEARCHABLE_DIMENSIONS)
+        vectors = client.embed_texts([texts[dimension] for dimension in dimensions])
+        if len(vectors) != len(dimensions):
+            raise RuntimeError("embedding model returned unexpected vector count")
+        return {
+            "user_id": int(record["user_id"]),
+            "source_row_index": record["source_row_index"],
+            "embedding_index_version": EMBEDDING_INDEX_VERSION,
+            "search_text_hash": search_text_hash(profile),
+            "vectors": {
+                dimension: vector
+                for dimension, vector in zip(dimensions, vectors)
+            },
+        }
+
+    successes, errors = parallel_map_with_retries(
+        selected,
+        worker,
+        concurrency=concurrency,
+        attempts=3,
+    )
+    merge_write_jsonl_by_user_id(build_workspace.processed_dir / EMBEDDINGS_FILE, successes)
+    write_latest_errors(build_workspace.processed_dir / INDEX_ERRORS_FILE, errors)
+    status = write_status(build_workspace)
+    if errors:
+        raise CandidateSearchError(
+            "BUILD_INDEX_FAILED",
+            "some embeddings failed",
+            failed_count=len(errors),
+            succeeded_count=len(successes),
+        )
+    return {
+        "indexed_count": len(successes),
+        "skipped_count": skipped_count,
+        "failed_count": 0,
+        "status": status,
+    }
+
+
 def run_with_retries(
     fn: Any,
     *,
@@ -719,4 +845,3 @@ def _error_item_identity(item: Any) -> Any:
             if key in item
         }
     return item
-

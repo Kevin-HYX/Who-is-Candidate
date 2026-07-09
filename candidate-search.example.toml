@@ -1,17 +1,21 @@
 # Copy this file to candidate-search.toml and fill in your local settings.
 # candidate-search.toml is ignored by git because it may contain secrets.
 
-[dashscope]
-# Required. Your DashScope API key.
+[openai]
+# Required. Your OpenAI-compatible API key.
 # Example: api_key = "sk-..."
 api_key = ""
 
+# Required. OpenAI-compatible endpoint.
+# Example: base_url = "https://example.aliyuncs.com/compatible-mode/v1"
+base_url = ""
+
 [models]
 # Required. Chat model used by CLI preprocess.
-preprocess = "qwen-plus"
+preprocess = "qwen3.7-max"
 
 # Required. Embedding model used by build-index and search query vectors.
-embedding = "text-embedding-v3"
+embedding = "text-embedding-v4"
 
 [paths]
 # Required. Raw JSONL profile data.

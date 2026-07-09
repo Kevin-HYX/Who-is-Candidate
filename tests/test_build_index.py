@@ -10,9 +10,8 @@ from src.constants import (
     SEARCHABLE_DIMENSIONS,
     STATUS_FILE,
 )
-from src.main import build_index
-from src.retrieval import canonical_hash, write_jsonl
-from src.schemas import CandidateSearchError, RuntimeConfig
+from src.retrieval import build_index, canonical_hash, write_jsonl
+from src.schemas import BuildWorkspace, CandidateSearchError, RuntimeConfig
 
 
 class FakeEmbeddingClient:
@@ -46,6 +45,30 @@ class BuildIndexTests(unittest.TestCase):
                 build_index(config, model_client=FakeEmbeddingClient())
             self.assertEqual(ctx.exception.code, "PREPROCESS_AND_INDEX_NOT_BUILT")
 
+    def test_build_index_can_target_explicit_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config, _ = _setup_config_with_raw(tmp)
+            root = Path(tmp)
+            workspace_raw = root / "raw_profiles.jsonl"
+            workspace_processed = root / "sample_artifacts"
+            workspace_processed.mkdir()
+            raw_profile = {"user_id": 9, "headline": "Sample Candidate"}
+            workspace_raw.write_text(json.dumps(raw_profile) + "\n", encoding="utf-8")
+            workspace = BuildWorkspace(
+                raw_profiles_path=workspace_raw,
+                processed_dir=workspace_processed,
+            )
+            preprocessed = _preprocessed_record(0, raw_profile)
+            write_jsonl(workspace_processed / PROCESSED_PROFILES_FILE, [preprocessed])
+
+            result = build_index(config, workspace=workspace, model_client=FakeEmbeddingClient())
+
+            self.assertEqual(result["indexed_count"], 1)
+            self.assertTrue((workspace_processed / EMBEDDINGS_FILE).exists())
+            self.assertTrue((workspace_processed / STATUS_FILE).exists())
+            self.assertFalse((config.processed_dir / EMBEDDINGS_FILE).exists())
+            self.assertFalse((config.processed_dir / STATUS_FILE).exists())
+
 
 def _setup_config_with_raw(tmp: str) -> tuple[RuntimeConfig, dict]:
     root = Path(tmp)
@@ -58,8 +81,9 @@ def _setup_config_with_raw(tmp: str) -> tuple[RuntimeConfig, dict]:
         RuntimeConfig(
             config_path=root / "candidate-search.toml",
             api_key="sk-test",
-            preprocess_model="qwen-plus",
-            embedding_model="text-embedding-v3",
+            base_url="https://example.test/compatible-mode/v1",
+            preprocess_model="qwen3.7-max",
+            embedding_model="text-embedding-v4",
             raw_profiles_path=raw_path,
             processed_dir=processed_dir,
         ),
@@ -89,4 +113,3 @@ def _preprocessed_record(index: int, raw_profile: dict) -> dict:
 
 if __name__ == "__main__":
     unittest.main()
-

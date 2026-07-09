@@ -29,8 +29,9 @@ class SearchRankingTests(unittest.TestCase):
             config = RuntimeConfig(
                 config_path=root / "candidate-search.toml",
                 api_key="sk-test",
-                preprocess_model="qwen-plus",
-                embedding_model="text-embedding-v3",
+                base_url="https://example.test/compatible-mode/v1",
+                preprocess_model="qwen3.7-max",
+                embedding_model="text-embedding-v4",
                 raw_profiles_path=raw_path,
                 processed_dir=processed_dir,
             )
@@ -134,4 +135,3 @@ def _embedding_record(index: int, user_id: int, preprocessed_record: dict, domai
 
 if __name__ == "__main__":
     unittest.main()
-

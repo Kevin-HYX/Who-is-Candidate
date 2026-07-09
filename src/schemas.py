@@ -36,13 +36,26 @@ class ProcessConfigError(Exception):
 
 
 @dataclass(frozen=True)
+class BuildWorkspace:
+    raw_profiles_path: Path
+    processed_dir: Path
+
+
+@dataclass(frozen=True)
 class RuntimeConfig:
     config_path: Path
     api_key: str
+    base_url: str
     preprocess_model: str
     embedding_model: str
     raw_profiles_path: Path
     processed_dir: Path
+
+    def build_workspace(self) -> BuildWorkspace:
+        return BuildWorkspace(
+            raw_profiles_path=self.raw_profiles_path,
+            processed_dir=self.processed_dir,
+        )
 
 
 @dataclass(frozen=True)
@@ -50,6 +63,24 @@ class SearchRequest:
     query_plan: dict[str, Any]
     options: dict[str, Any]
     top_k: int
+
+
+def search_tool_schema() -> dict[str, Any]:
+    return {
+        "name": "search_candidates",
+        "description": "Search candidates with a complete QueryPlan.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["query_plan"],
+            "properties": {
+                "query_plan": {"type": "object"},
+                "options": {
+                    "type": "object",
+                    "properties": {"top_k": {"type": "integer", "minimum": 1, "maximum": 75}},
+                },
+            },
+        },
+    }
 
 
 def load_config(config_path: str | Path | None = None) -> RuntimeConfig:
@@ -80,7 +111,8 @@ def load_config(config_path: str | Path | None = None) -> RuntimeConfig:
 
     return RuntimeConfig(
         config_path=path,
-        api_key=data["dashscope"]["api_key"].strip(),
+        api_key=data["openai"]["api_key"].strip(),
+        base_url=data["openai"]["base_url"].strip(),
         preprocess_model=data["models"]["preprocess"].strip(),
         embedding_model=data["models"]["embedding"].strip(),
         raw_profiles_path=raw_profiles_path,
