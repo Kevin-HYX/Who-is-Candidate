@@ -13,6 +13,7 @@ from .evaluation import (
     create_test_sample,
     create_user_prompt_set,
     list_retrieval_trials,
+    list_generation_runs,
     list_test_samples,
     list_user_prompt_sets,
     map_user_prompt_set,
@@ -20,6 +21,9 @@ from .evaluation import (
     read_retrieval_trial,
     read_retrieval_trial_errors,
     read_retrieval_trial_results,
+    read_generation_attempt,
+    read_generation_run,
+    read_generation_run_events,
     read_test_sample,
     read_test_sample_errors,
     read_test_sample_preprocessed,
@@ -52,6 +56,15 @@ from .schemas import (
 )
 
 
+STREAMING_RUN_COMMANDS = {
+    "test-sample-preprocess",
+    "test-sample-build-index",
+    "test-sample-build",
+    "user-prompt-set-map",
+    "retrieval-trial-run",
+}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -64,11 +77,19 @@ def main(argv: list[str] | None = None) -> int:
         print(f"配置错误: {exc}", file=sys.stderr)
         return 2
     except CandidateSearchError as exc:
+        if args.command in STREAMING_RUN_COMMANDS:
+            print(
+                json.dumps(exc.to_dict(), ensure_ascii=False, separators=(",", ":")),
+                file=sys.stderr,
+            )
+            return 1
         if getattr(args, "json", False) or args.command == "search":
             print(json.dumps(exc.to_dict(), ensure_ascii=False, indent=2))
         else:
             print(f"{exc.code}: {exc.message}", file=sys.stderr)
         return 1
+    except KeyboardInterrupt:
+        return 130
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -160,7 +181,6 @@ def build_parser() -> argparse.ArgumentParser:
     test_sample_preprocess_parser.add_argument("--sample-id", required=True)
     test_sample_preprocess_parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     test_sample_preprocess_parser.add_argument("--discard-cache", action="store_true")
-    test_sample_preprocess_parser.add_argument("--json", action="store_true")
     test_sample_preprocess_parser.set_defaults(func=cmd_test_sample_preprocess)
 
     test_sample_build_index_parser = subparsers.add_parser("test-sample-build-index")
@@ -168,7 +188,6 @@ def build_parser() -> argparse.ArgumentParser:
     test_sample_build_index_parser.add_argument("--sample-id", required=True)
     test_sample_build_index_parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     test_sample_build_index_parser.add_argument("--discard-cache", action="store_true")
-    test_sample_build_index_parser.add_argument("--json", action="store_true")
     test_sample_build_index_parser.set_defaults(func=cmd_test_sample_build_index)
 
     test_sample_build_parser = subparsers.add_parser("test-sample-build")
@@ -176,7 +195,6 @@ def build_parser() -> argparse.ArgumentParser:
     test_sample_build_parser.add_argument("--sample-id", required=True)
     test_sample_build_parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     test_sample_build_parser.add_argument("--discard-cache", action="store_true")
-    test_sample_build_parser.add_argument("--json", action="store_true")
     test_sample_build_parser.set_defaults(func=cmd_test_sample_build)
 
     user_prompt_set_create_parser = subparsers.add_parser("user-prompt-set-create")
@@ -191,7 +209,6 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_config(user_prompt_set_map_parser)
     user_prompt_set_map_parser.add_argument("--set-id", required=True)
     user_prompt_set_map_parser.add_argument("--discard-cache", action="store_true")
-    user_prompt_set_map_parser.add_argument("--json", action="store_true")
     user_prompt_set_map_parser.set_defaults(func=cmd_user_prompt_set_map)
 
     user_prompt_set_show_parser = subparsers.add_parser("user-prompt-set-show")
@@ -231,7 +248,6 @@ def build_parser() -> argparse.ArgumentParser:
     retrieval_trial_run_parser.add_argument("--trial-id", required=True)
     retrieval_trial_run_parser.add_argument("--sample-id", required=True)
     retrieval_trial_run_parser.add_argument("--user-prompt-set-id", required=True)
-    retrieval_trial_run_parser.add_argument("--json", action="store_true")
     retrieval_trial_run_parser.set_defaults(func=cmd_retrieval_trial_run)
 
     retrieval_trial_show_parser = subparsers.add_parser("retrieval-trial-show")
@@ -259,6 +275,35 @@ def build_parser() -> argparse.ArgumentParser:
     retrieval_trial_read_errors_parser.add_argument("--json", action="store_true")
     retrieval_trial_read_errors_parser.set_defaults(func=cmd_retrieval_trial_read_errors)
 
+    run_list_parser = subparsers.add_parser("run-list")
+    add_common_config(run_list_parser)
+    add_run_owner(run_list_parser)
+    run_list_parser.add_argument("--json", action="store_true")
+    run_list_parser.set_defaults(func=cmd_run_list)
+
+    run_show_parser = subparsers.add_parser("run-show")
+    add_common_config(run_show_parser)
+    add_run_owner(run_show_parser)
+    run_show_parser.add_argument("--run-id", required=True)
+    run_show_parser.add_argument("--json", action="store_true")
+    run_show_parser.set_defaults(func=cmd_run_show)
+
+    run_events_parser = subparsers.add_parser("run-events")
+    add_common_config(run_events_parser)
+    add_run_owner(run_events_parser)
+    add_common_page(run_events_parser)
+    run_events_parser.add_argument("--run-id", required=True)
+    run_events_parser.add_argument("--json", action="store_true")
+    run_events_parser.set_defaults(func=cmd_run_events)
+
+    run_attempt_parser = subparsers.add_parser("run-attempt")
+    add_common_config(run_attempt_parser)
+    add_run_owner(run_attempt_parser)
+    run_attempt_parser.add_argument("--run-id", required=True)
+    run_attempt_parser.add_argument("--artifact", required=True)
+    run_attempt_parser.add_argument("--json", action="store_true")
+    run_attempt_parser.set_defaults(func=cmd_run_attempt)
+
     return parser
 
 
@@ -274,6 +319,15 @@ def add_range(parser: argparse.ArgumentParser) -> None:
 def add_common_page(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--offset", type=int, default=0)
     parser.add_argument("--limit", type=int, default=BROWSE_DEFAULT_LIMIT)
+
+
+def add_run_owner(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--owner-type",
+        required=True,
+        choices=("test-sample", "user-prompt-set", "retrieval-trial"),
+    )
+    parser.add_argument("--owner-id", required=True)
 
 
 def cmd_preprocess(args: argparse.Namespace) -> int:
@@ -424,8 +478,8 @@ def cmd_test_sample_preprocess(args: argparse.Namespace) -> int:
         args.sample_id,
         concurrency=args.concurrency,
         discard_cache=args.discard_cache,
+        event_stream=sys.stdout,
     )
-    print_output(result, as_json=args.json)
     return 0
 
 
@@ -436,8 +490,8 @@ def cmd_test_sample_build_index(args: argparse.Namespace) -> int:
         args.sample_id,
         concurrency=args.concurrency,
         discard_cache=args.discard_cache,
+        event_stream=sys.stdout,
     )
-    print_output(result, as_json=args.json)
     return 0
 
 
@@ -448,8 +502,8 @@ def cmd_test_sample_build(args: argparse.Namespace) -> int:
         args.sample_id,
         concurrency=args.concurrency,
         discard_cache=args.discard_cache,
+        event_stream=sys.stdout,
     )
-    print_output(result, as_json=args.json)
     return 0
 
 
@@ -471,8 +525,8 @@ def cmd_user_prompt_set_map(args: argparse.Namespace) -> int:
         config,
         args.set_id,
         discard_cache=args.discard_cache,
+        event_stream=sys.stdout,
     )
-    print_output(result, as_json=args.json)
     return 0
 
 
@@ -533,8 +587,8 @@ def cmd_retrieval_trial_run(args: argparse.Namespace) -> int:
         trial_id=args.trial_id,
         sample_id=args.sample_id,
         user_prompt_set_id=args.user_prompt_set_id,
+        event_stream=sys.stdout,
     )
-    print_output(result, as_json=args.json)
     return 0
 
 
@@ -574,6 +628,60 @@ def cmd_retrieval_trial_read_errors(args: argparse.Namespace) -> int:
     )
     print_output(result, as_json=args.json)
     return 0
+
+
+def cmd_run_list(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = list_generation_runs(
+        config,
+        _run_owner_type(args.owner_type),
+        args.owner_id,
+    )
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def cmd_run_show(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = read_generation_run(
+        config,
+        _run_owner_type(args.owner_type),
+        args.owner_id,
+        args.run_id,
+    )
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def cmd_run_events(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = read_generation_run_events(
+        config,
+        _run_owner_type(args.owner_type),
+        args.owner_id,
+        args.run_id,
+        offset=args.offset,
+        limit=args.limit,
+    )
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def cmd_run_attempt(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = read_generation_attempt(
+        config,
+        _run_owner_type(args.owner_type),
+        args.owner_id,
+        args.run_id,
+        args.artifact,
+    )
+    print_output(result, as_json=args.json)
+    return 0
+
+
+def _run_owner_type(value: str) -> str:
+    return value.replace("-", "_")
 
 
 def print_output(result: dict[str, Any], *, as_json: bool) -> None:

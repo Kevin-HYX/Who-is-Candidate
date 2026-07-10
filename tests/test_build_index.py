@@ -24,6 +24,16 @@ class FakeEmbeddingClient:
         return [[float(index), 1.0] for index, _ in enumerate(texts)]
 
 
+class RecordingEmbeddingClient(FakeEmbeddingClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.requests: list[list[str]] = []
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        self.requests.append(list(texts))
+        return super().embed_texts(texts)
+
+
 class InvalidEmbeddingClient:
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         raise RuntimeError("embedding request failed")
@@ -53,6 +63,28 @@ class BuildIndexTests(unittest.TestCase):
             status = get_index_status(config)
             self.assertEqual(status["index_status"], "full")
             self.assertFalse((config.processed_dir / "status.json").exists())
+
+    def test_not_provided_search_text_is_not_embedded_but_index_remains_full(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config, raw_profile = _setup_config_with_raw(tmp)
+            preprocessed = _preprocessed_record(0, raw_profile, config=config)
+            missing_dimension = "achievements_search_text"
+            preprocessed["preprocessed_profile"]["embedding_search_texts"][
+                missing_dimension
+            ] = "not_provided"
+            write_jsonl(config.processed_dir / PROCESSED_PROFILES_FILE, [preprocessed])
+            client = RecordingEmbeddingClient()
+
+            build_index(config, model_client=client)
+
+            self.assertEqual(len(client.requests), 1)
+            self.assertEqual(len(client.requests[0]), len(SEARCHABLE_DIMENSIONS) - 1)
+            self.assertNotIn("not_provided", client.requests[0])
+            embedding = json.loads(
+                (config.processed_dir / EMBEDDINGS_FILE).read_text(encoding="utf-8")
+            )
+            self.assertNotIn(missing_dimension, embedding["vectors"])
+            self.assertEqual(get_index_status(config)["index_status"], "full")
 
     def test_build_index_requires_preprocessed_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

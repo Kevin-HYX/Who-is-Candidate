@@ -28,6 +28,14 @@ _Avoid_: parse query, search
 The structured profile produced by Preprocess from one raw candidate profile, containing search-ready fields and evidence for later retrieval.
 _Avoid_: enhanced profile, enriched profile
 
+**Primary Current Position**:
+The single current position that represents the candidate's main active role when multiple positions are current. Other concurrent positions remain part of the candidate's experience but do not redefine the primary position.
+_Avoid_: highest current role, all current roles
+
+**Current Position Level**:
+The LinkedIn-aligned organizational band of the candidate's Primary Current Position, using `Internship`, `Entry level`, `Associate`, `Mid-Senior level`, `Director`, or `Executive`. It is unknown when no current position exists and is distinct from professional capability, career length, credentials, management scope, and ownership identity.
+_Avoid_: professional level, experience level, management scope
+
 **Build Index**:
 The CLI build step that prepares all files needed for retrieval from preprocessed profiles, including embeddings and local index/cache files.
 _Avoid_: embed only, runtime fallback
@@ -84,6 +92,10 @@ _Avoid_: recommendation, explanation
 The per-result status describing whether hard constraints were fully passed or whether the candidate was kept because some hard-constraint fields had insufficient evidence.
 _Avoid_: hard score, hard explanation
 
+**Hard-Filter Confidence**:
+The evidence-strength classification attached to every candidate hard-field value, whether produced by a model or a code formula. `high` means the evidence is direct, unambiguous, and conflict-free enough to authorize hard elimination; `medium` and `low` preserve weaker conclusions but never authorize hard elimination. An `unknown` value may carry `medium` when substantial evidence is conflicting or ambiguous, or `low` when evidence is absent or weak, but it can never carry `high`. `medium` and `low` do not affect filtering, ranking, weighting, or tie-breaking; their distinction exists only for evidence review and prompt evaluation. It is not the model's subjective confidence in its own answer.
+_Avoid_: model confidence, probability score, certainty percentage
+
 **Absent Evidence**:
 The absence of an explicit field or signal in a raw profile. It cannot prove that a candidate lacks an attribute; it means the attribute is unknown unless another explicit source states the negative.
 _Avoid_: negative evidence, failed condition
@@ -132,8 +144,24 @@ _Avoid_: retrieval status, hidden failed prompts, all-or-nothing output, persist
 The reusable successful output of an LLM-generating stage when its prerequisites have not changed. By default the system skips already successful items, while the controlling Agent can explicitly discard cached outputs and force regeneration.
 _Avoid_: silent fallback, immutable output, hidden retry state
 
+**Generation Run**:
+One identified foreground CLI execution of a generation or model-dependent build action. It exposes ordered Run Events while executing and ends with exactly one completed, failed, or interrupted terminal event. A combined command remains one Generation Run and separates its internal work into named phases rather than creating child runs.
+_Avoid_: background job, cached status, anonymous command execution
+
+**Run Event**:
+An ordered fact emitted by a Generation Run, such as an item starting, an attempt failing validation, a retry beginning, an item succeeding, or the run completing. Each event has a run-wide monotonic sequence number assigned by one event writer. The event is retained before the identical fact is exposed live, so persisted and observed ordering cannot diverge.
+_Avoid_: console message, reconstructed log line, synchronized status update
+
+**Run Event Log**:
+The complete retained sequence of Run Events for one Generation Run. Events already recorded survive process interruption and allow the controlling Agent to review the same execution facts it observed live. Each log is permanently owned by the Test Sample, User Prompt Set, or Retrieval Trial that the run operates on rather than by a global run registry.
+_Avoid_: latest error file, final summary, mutable status log
+
+**Failed Attempt Artifact**:
+The complete raw model output retained for one failed generation attempt when such output exists. Its Run Event carries a compact excerpt, validation location, exact error, artifact reference, and content hash instead of duplicating the full output in the live stream. Transport failures have no raw-output artifact.
+_Avoid_: successful generated artifact, console dump, final error summary
+
 **Retrieval Trial**:
-The immutable, atomically published retrieval execution for a valid Prompt Mapping against a ready Test Sample. It freezes both inputs, runs from those snapshots, and stores the exact QueryPlan, effective options, query vectors, SearchResult, and input hashes needed for audit or replay. It refuses to run when the Test Sample or User Prompt Set is invalid, because those errors belong to their own debugging stages.
+The immutable retrieval execution for a valid Prompt Mapping against a ready Test Sample. It freezes both inputs and stores the exact QueryPlan, effective options, query vectors, SearchResult, input hashes, and owned Run Event Log needed for audit or replay. Invalid prerequisites do not create a Trial, but once execution starts the Trial identity is consumed and its success, partial failure, or interruption facts remain inspectable; reruns use a new Trial ID.
 _Avoid_: preprocessing output, prompt snapshot, natural-language need
 
 **Evaluation Loop**:

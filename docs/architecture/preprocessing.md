@@ -34,14 +34,40 @@ Raw Profile
 
 implementation 还会把 `current_role_tenure_months` 与 `avg_tenure_months` 写入 `derived_fields`。它们是代码公式派生字段，不计入七个硬字段。
 
+## Current Position Level
+
+`seniority_level` 表示候选人 Primary Current Position 的 Current Position Level，只使用六档 LinkedIn-aligned 顺序：
+
+```text
+Internship < Entry level < Associate < Mid-Senior level < Director < Executive
+```
+
+Preprocess 只考虑 `is_current == true` 的经历；多个当前职位优先按顶层 `active_experience_title` 选择主要职位，无法匹配时选择 `order_in_profile == 1` 的当前经历。没有当前职位时返回 `unknown + low`，历史职位不得补位。
+
+标准化来源映射固定为：`Intern -> Internship`、`Specialist -> Associate`、`Senior/Manager -> Mid-Senior level`、`Director -> Director`、`President/Vice President` 与 `C-Level -> Executive`。`Founder`、`Owner`、`Partner` 和 `Head` 本身不决定职级；所有者身份写入 `ownership_search_text`。工作年限、证书、专业能力和缺失的管理描述均不得用于授予 `seniority_level + high`。
+
+## Hard-Filter Confidence
+
+所有硬字段统一使用 `high`、`medium`、`low` 三档 Hard-Filter Confidence，无论字段来自 LLM 还是代码公式。它不是概率，也不是模型对自己回答的主观把握：
+
+- `high` 表示证据直接、明确、无冲突，允许 Tool 根据该值执行硬淘汰；
+- `medium` 表示存在相关证据，但仍依赖映射、上下文不完整、存在歧义或冲突，不能硬淘汰；
+- `low` 表示证据很弱、稀疏或缺失，不能硬淘汰。
+
+`medium` 和 `low` 不影响过滤、排序、权重或 tie-break，只用于证据审计、Browse 和 prompt 评测。`unknown` 是 value 的缺失状态，不再是 confidence 值：冲突或多解证据可形成 `unknown + medium`，缺失或极弱证据形成 `unknown + low`，`unknown + high` 非法。四个 LLM 推断字段分别在 executable prompt 中定义 `high` 的证据门槛；未达到对应门槛时，即使某个 value 看起来很可能，也不得标为 `high`。
+
 ## Preprocessed Profile 的最小可执行契约
 
 当前 implementation 在写 cache 前至少验证：
 
 - `hard_fields` 是对象，且包含上述七个对象字段；
-- `embedding_search_texts` 是对象，且包含七个非空检索文本；维度白名单由 [`src/constants.py`](../../src/constants.py) 定义；
+- `embedding_search_texts` 是对象，且包含七个非空字符串；有正向检索内容时保存受控扩展文本，没有内容时必须使用 `not_provided`。维度白名单与缺失状态由 [`src/constants.py`](../../src/constants.py) 定义；
 - 模型生成的自然语言必须使用英语和 Latin script；非 Latin 专名需要转写，运行时会拒绝非 Latin 字母；
 - 推断结果必须遵守“缺失不是否定”：无法举证时使用 `unknown`、`not_provided` 或 `insufficient_evidence`，不得通过 fallback 编造事实。
+- `confidence` 只能是 `high`、`medium`、`low`；unknown value 不能使用 `high`。`unknown + low` 的 `evidence` 只要求为非空英文，可以使用缺失状态词，也可以简要说明原始档案缺少什么证据。
+- `seniority_level` 只能使用六档 Current Position Level 或 `unknown`；旧八档值会作为非法模型输出被拒绝。
+
+`not_provided` 不会发送给 embedding 模型，Embedding Record 只保存实际可用维度的向量。候选人即使七个软维度均不完整，也不会因为软数据缺失而在 Build Index 阶段失败；缺失维度只在对应查询偏好上贡献 `0`，其他硬字段和软维度仍然可用。自然语言形式的缺失句和旧 `insufficient_evidence` 软文本会被拒绝，避免把“没有数据”本身嵌入为候选人语义。
 
 每条成功 cache record 的 envelope 包含 `user_id`、`source_row_index`、`raw_profile_hash`、`preprocess_schema_version`、`preprocess_prompt_hash`、`preprocess_model_hash` 与 `preprocessed_profile`。字段校验与 record 形状以 [`src/preprocess.py`](../../src/preprocess.py) 为准；Versioned Build Cache 与 Raw Profile Hash 规则由 [ADR-0002](../adr/0002-versioned-merge-write-build-cache.md) 固化。
 

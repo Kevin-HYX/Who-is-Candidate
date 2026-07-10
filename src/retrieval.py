@@ -16,6 +16,7 @@ from .constants import (
     HARD_CONSTRAINT_FIELDS,
     INDEX_ERRORS_FILE,
     MANAGEMENT_SCOPE_RANK,
+    MISSING_SEARCH_TEXT,
     PREPROCESS_SCHEMA_VERSION,
     PREPROCESS_ERRORS_FILE,
     PROCESSED_PROFILES_FILE,
@@ -23,6 +24,13 @@ from .constants import (
     SENIORITY_RANK,
 )
 from .schemas import BuildWorkspace, CandidateSearchError, RuntimeConfig, validate_search_request
+from .run_log import (
+    AttemptFailure,
+    RawModelOutput,
+    RunEventWriter,
+    attempt_error_details,
+    original_attempt_error,
+)
 
 
 class ModelClient(Protocol):
@@ -45,8 +53,16 @@ class OpenAICompatibleModelClient:
             model=self.config.embedding_model,
             input=texts,
         )
-        embeddings = sorted(response.data, key=lambda item: item.index)
-        return [list(item.embedding) for item in embeddings]
+        try:
+            embeddings = sorted(response.data, key=lambda item: item.index)
+            return [list(item.embedding) for item in embeddings]
+        except Exception as exc:  # noqa: BLE001 - response exists and must be retained.
+            raise AttemptFailure(
+                exc,
+                stage="embedding_validation",
+                error_code="EMBEDDING_RESPONSE_INVALID",
+                raw_output=_model_response_payload(response),
+            ) from exc
 
     def preprocess_profile(self, prompt: str, raw_profile: dict[str, Any]) -> dict[str, Any]:
         client = self._client()
@@ -60,10 +76,32 @@ class OpenAICompatibleModelClient:
                 },
             ],
         )
-        content = response.choices[0].message.content
+        try:
+            content = response.choices[0].message.content
+        except Exception as exc:  # noqa: BLE001 - response exists and must be retained.
+            raise AttemptFailure(
+                exc,
+                stage="response_parse",
+                error_code="MODEL_RESPONSE_PARSE_FAILED",
+                raw_output=_model_response_payload(response),
+            ) from exc
         if not content:
-            raise ValueError("LLM output is empty")
-        return _parse_json_content(content)
+            raise AttemptFailure(
+                ValueError("LLM output is empty"),
+                stage="response_parse",
+                error_code="MODEL_RESPONSE_PARSE_FAILED",
+                raw_output=content,
+            )
+        try:
+            parsed = _parse_json_content(content)
+        except ValueError as exc:
+            raise AttemptFailure(
+                exc,
+                stage="response_parse",
+                error_code="MODEL_RESPONSE_PARSE_FAILED",
+                raw_output=content,
+            ) from exc
+        return RawModelOutput(parsed, content)
 
     def generate_query_plan(
         self,
@@ -84,10 +122,32 @@ class OpenAICompatibleModelClient:
                 {"role": "user", "content": user_prompt},
             ],
         )
-        content = response.choices[0].message.content
+        try:
+            content = response.choices[0].message.content
+        except Exception as exc:  # noqa: BLE001 - response exists and must be retained.
+            raise AttemptFailure(
+                exc,
+                stage="response_parse",
+                error_code="MODEL_RESPONSE_PARSE_FAILED",
+                raw_output=_model_response_payload(response),
+            ) from exc
         if not content:
-            raise ValueError("LLM output is empty")
-        return _parse_json_content(content)
+            raise AttemptFailure(
+                ValueError("LLM output is empty"),
+                stage="response_parse",
+                error_code="MODEL_RESPONSE_PARSE_FAILED",
+                raw_output=content,
+            )
+        try:
+            parsed = _parse_json_content(content)
+        except ValueError as exc:
+            raise AttemptFailure(
+                exc,
+                stage="response_parse",
+                error_code="MODEL_RESPONSE_PARSE_FAILED",
+                raw_output=content,
+            ) from exc
+        return RawModelOutput(parsed, content)
 
     def _client(self) -> Any:
         openai = _load_openai()
@@ -106,6 +166,15 @@ def _load_openai() -> Any:
             "缺少 openai SDK。请先安装依赖: pip install openai"
         ) from exc
     return openai
+
+
+def _model_response_payload(response: Any) -> Any | None:
+    model_dump = getattr(response, "model_dump", None)
+    if callable(model_dump):
+        return model_dump(mode="json")
+    if isinstance(response, (dict, list, str, bytes)):
+        return response
+    return None
 
 
 def _parse_json_content(content: str) -> dict[str, Any]:
@@ -254,9 +323,9 @@ def search_candidates(
             "passed_hard_filter": len(candidates),
             "requested_top_k": request.top_k,
             "returned_count": len(results),
-            "normalization": "percentile",
+            "normalization": "survivor_percentile_with_l1_normalized_weights",
             "returned_beyond_top_k_reason": beyond_reason,
-            "score_formula": "final_score = sum(score_after_weight); score_after_weight = weight * score_before_weight",
+            "score_formula": "effective_weight = input_weight / sum(abs(input_weights)); final_score = sum(score_after_weight); score_after_weight = effective_weight * score_before_weight",
         },
         "results": results,
     }
@@ -306,9 +375,9 @@ def get_index_status(config: RuntimeConfig, workspace: BuildWorkspace | None = N
         if not isinstance(vectors, dict):
             continue
         try:
-            _validate_embedding_vectors(
-                [vectors.get(dimension) for dimension in sorted(SEARCHABLE_DIMENSIONS)],
-                expected_count=len(SEARCHABLE_DIMENSIONS),
+            _validate_candidate_embedding_record(
+                preprocessed_record["preprocessed_profile"],
+                record,
                 context="cached candidate embedding",
             )
         except ValueError:
@@ -568,6 +637,18 @@ def _validate_cache_consistency(
                 "search texts changed after build-index",
                 user_id=user_id,
             )
+        try:
+            _validate_candidate_embedding_record(
+                profile_record["preprocessed_profile"],
+                embedding_record,
+                context="candidate embedding artifact",
+            )
+        except ValueError as exc:
+            raise CandidateSearchError(
+                "SEARCH_INDEX_NOT_BUILT",
+                "embedding record vectors are not usable",
+                user_id=user_id,
+            ) from exc
 
 
 def _usable_embedding_records(
@@ -695,7 +776,12 @@ def _score_candidates(
     preferences: list[dict[str, Any]],
     query_vectors: list[list[float]],
 ) -> list[dict[str, Any]]:
-    raw_scores_by_pref: list[list[float]] = []
+    total_absolute_weight = sum(abs(preference["weight"]) for preference in preferences)
+    effective_weights = [
+        round(preference["weight"] / total_absolute_weight, 6)
+        for preference in preferences
+    ]
+    raw_scores_by_pref: list[list[float | None]] = []
     for pref_index, preference in enumerate(preferences):
         dimension = preference["dimension"]
         query_vector = query_vectors[pref_index]
@@ -704,13 +790,9 @@ def _score_candidates(
             vectors = candidate["embedding_record"].get("vectors", {})
             candidate_vector = vectors.get(dimension)
             if candidate_vector is None:
-                raise CandidateSearchError(
-                    "SEARCH_TEXT_HASH_MISMATCH",
-                    "embedding record is missing a searchable dimension",
-                    user_id=candidate["user_id"],
-                    dimension=dimension,
-                )
-            scores.append(cosine_similarity(query_vector, candidate_vector))
+                scores.append(None)
+            else:
+                scores.append(cosine_similarity(query_vector, candidate_vector))
         raw_scores_by_pref.append(scores)
 
     percentiles_by_pref = [_percentiles(scores) for scores in raw_scores_by_pref]
@@ -719,12 +801,13 @@ def _score_candidates(
         soft_scores = []
         for pref_index, preference in enumerate(preferences):
             before = round(percentiles_by_pref[pref_index][candidate_index], 6)
-            after = round(before * preference["weight"], 6)
+            effective_weight = effective_weights[pref_index]
+            after = round(before * effective_weight, 6)
             soft_scores.append(
                 {
                     "preference_index": pref_index,
                     "dimension": preference["dimension"],
-                    "weight": preference["weight"],
+                    "weight": effective_weight,
                     "score_before_weight": before,
                     "score_after_weight": after,
                 }
@@ -755,12 +838,22 @@ def cosine_similarity(left: list[float], right: list[float]) -> float:
     return dot / (left_norm * right_norm)
 
 
-def _percentiles(scores: list[float]) -> list[float]:
+def _percentiles(scores: list[float | None]) -> list[float]:
     if not scores:
         return []
     if len(scores) == 1:
-        return [1.0]
-    return [sum(1 for other in scores if other < score) / (len(scores) - 1) for score in scores]
+        return [0.0 if scores[0] is None else 1.0]
+    return [
+        0.0
+        if score is None
+        else sum(
+            1
+            for other in scores
+            if other is None or other < score
+        )
+        / (len(scores) - 1)
+        for score in scores
+    ]
 
 
 def _rank_candidates(scored: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -799,6 +892,8 @@ def build_index(
     concurrency: int = DEFAULT_CONCURRENCY,
     model_client: Any | None = None,
     discard_cache: bool = False,
+    event_writer: RunEventWriter | None = None,
+    event_phase: str = "build_index",
 ) -> dict[str, Any]:
     build_workspace = workspace or config.build_workspace()
     raw_dataset = load_raw_dataset(build_workspace.raw_profiles_path)
@@ -869,6 +964,14 @@ def build_index(
             and cached_embedding.get("search_text_hash") == current_search_text_hash
         ):
             skipped_count += 1
+            if event_writer is not None:
+                event_writer.emit(
+                    "item_skipped",
+                    phase=event_phase,
+                    source_row_index=source_row_index,
+                    user_id=user_id,
+                    reason="current_embedding_cache",
+                )
             continue
         selected.append(record)
 
@@ -892,13 +995,30 @@ def build_index(
     def worker(record: dict[str, Any]) -> dict[str, Any]:
         profile = record["preprocessed_profile"]
         texts = profile["embedding_search_texts"]
-        dimensions = sorted(SEARCHABLE_DIMENSIONS)
-        vectors = client.embed_texts([texts[dimension] for dimension in dimensions])
-        _validate_embedding_vectors(
-            vectors,
-            expected_count=len(dimensions),
-            context="candidate embedding",
+        dimensions = [
+            dimension
+            for dimension in sorted(SEARCHABLE_DIMENSIONS)
+            if texts[dimension].strip() != MISSING_SEARCH_TEXT
+        ]
+        vectors = (
+            client.embed_texts([texts[dimension] for dimension in dimensions])
+            if dimensions
+            else []
         )
+        try:
+            if dimensions:
+                _validate_embedding_vectors(
+                    vectors,
+                    expected_count=len(dimensions),
+                    context="candidate embedding",
+                )
+        except ValueError as exc:
+            raise AttemptFailure(
+                exc,
+                stage="embedding_validation",
+                error_code="EMBEDDING_VALIDATION_FAILED",
+                raw_output=vectors,
+            ) from exc
         return {
             "user_id": int(record["user_id"]),
             "source_row_index": record["source_row_index"],
@@ -916,9 +1036,36 @@ def build_index(
         worker,
         concurrency=concurrency,
         attempts=3,
+        event_writer=event_writer,
+        event_phase=event_phase,
+        item_identity=_error_item_identity,
+        default_error_code="BUILD_INDEX_ATTEMPT_FAILED",
     )
-    merge_write_jsonl_by_user_id(build_workspace.processed_dir / EMBEDDINGS_FILE, successes)
-    write_latest_errors(build_workspace.processed_dir / INDEX_ERRORS_FILE, errors)
+    embeddings_path = build_workspace.processed_dir / EMBEDDINGS_FILE
+    errors_path = build_workspace.processed_dir / INDEX_ERRORS_FILE
+    try:
+        merge_write_jsonl_by_user_id(embeddings_path, successes)
+        write_latest_errors(errors_path, errors)
+    except Exception as exc:  # noqa: BLE001 - surfaced as a run artifact failure.
+        raise AttemptFailure(
+            exc,
+            stage="artifact_write",
+            error_code="INDEX_ARTIFACT_WRITE_FAILED",
+        ) from exc
+    if event_writer is not None:
+        event_writer.emit(
+            "artifact_written",
+            phase=event_phase,
+            artifact_kind="embeddings",
+            artifact_path=embeddings_path.name,
+        )
+        if errors_path.exists():
+            event_writer.emit(
+                "artifact_written",
+                phase=event_phase,
+                artifact_kind="index_errors",
+                artifact_path=errors_path.name,
+            )
     status = get_index_status(config, build_workspace)
     if errors:
         raise CandidateSearchError(
@@ -959,6 +1106,33 @@ def _validate_embedding_vectors(
         raise ValueError(f"{context} vectors must have one consistent dimension")
 
 
+def _validate_candidate_embedding_record(
+    preprocessed_profile: dict[str, Any],
+    embedding_record: dict[str, Any],
+    *,
+    context: str,
+) -> None:
+    texts = preprocessed_profile.get("embedding_search_texts")
+    vectors = embedding_record.get("vectors")
+    if not isinstance(texts, dict) or not isinstance(vectors, dict):
+        raise ValueError(f"{context} must contain search texts and vectors")
+    expected_dimensions = {
+        dimension
+        for dimension in SEARCHABLE_DIMENSIONS
+        if texts.get(dimension, "").strip() != MISSING_SEARCH_TEXT
+    }
+    if set(vectors) != expected_dimensions:
+        raise ValueError(f"{context} dimensions do not match searchable texts")
+    if not expected_dimensions:
+        return
+    ordered_vectors = [vectors[dimension] for dimension in sorted(expected_dimensions)]
+    _validate_embedding_vectors(
+        ordered_vectors,
+        expected_count=len(ordered_vectors),
+        context=context,
+    )
+
+
 def run_with_retries(
     fn: Any,
     *,
@@ -987,12 +1161,77 @@ def parallel_map_with_retries(
     *,
     concurrency: int,
     attempts: int = 3,
+    event_writer: RunEventWriter | None = None,
+    event_phase: str | None = None,
+    item_identity: Any | None = None,
+    default_error_code: str = "GENERATION_ATTEMPT_FAILED",
 ) -> tuple[list[Any], list[dict[str, Any]]]:
     successes = []
     errors = []
+
+    def execute(item: Any) -> Any:
+        identity = (
+            item_identity(item)
+            if item_identity is not None
+            else _error_item_identity(item)
+        )
+        for attempt in range(1, attempts + 1):
+            if event_writer is not None:
+                event_writer.emit(
+                    "attempt_started",
+                    phase=event_phase,
+                    **identity,
+                    attempt=attempt,
+                    max_attempts=attempts,
+                )
+            try:
+                result = worker(item)
+            except Exception as exc:  # noqa: BLE001 - every failed attempt is retained.
+                if event_writer is not None:
+                    event_writer.emit_attempt_failed(
+                        exc,
+                        phase=event_phase or "generation",
+                        item=identity,
+                        attempt=attempt,
+                        max_attempts=attempts,
+                        default_error_code=default_error_code,
+                    )
+                if attempt == attempts:
+                    if event_writer is not None:
+                        details = attempt_error_details(
+                            exc,
+                            default_error_code=default_error_code,
+                        )
+                        event_writer.emit(
+                            "item_failed",
+                            phase=event_phase,
+                            **identity,
+                            stage=details["stage"],
+                            error_code=details["error_code"],
+                            field_path=details["field_path"],
+                            message=details["message"],
+                        )
+                    raise
+            else:
+                if event_writer is not None:
+                    event_writer.emit(
+                        "attempt_succeeded",
+                        phase=event_phase,
+                        **identity,
+                        attempt=attempt,
+                        max_attempts=attempts,
+                    )
+                    event_writer.emit(
+                        "item_succeeded",
+                        phase=event_phase,
+                        **identity,
+                    )
+                return result
+        raise AssertionError("retry loop exhausted without result or error")
+
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
         futures = {
-            executor.submit(lambda item=item: run_with_retries(lambda: worker(item), attempts=attempts)): item
+            executor.submit(execute, item): item
             for item in items
         }
         for future in as_completed(futures):
@@ -1000,11 +1239,19 @@ def parallel_map_with_retries(
             try:
                 successes.append(future.result())
             except Exception as exc:  # noqa: BLE001 - surfaced in latest error JSONL.
+                original = original_attempt_error(exc)
+                details = attempt_error_details(
+                    exc,
+                    default_error_code=default_error_code,
+                )
                 errors.append(
                     {
                         "item": _error_item_identity(item),
-                        "error_type": type(exc).__name__,
-                        "message": str(exc),
+                        "error_type": type(original).__name__,
+                        "message": str(original),
+                        "stage": details["stage"],
+                        "error_code": details["error_code"],
+                        "field_path": details["field_path"],
                     }
                 )
     return successes, errors
@@ -1012,9 +1259,13 @@ def parallel_map_with_retries(
 
 def _error_item_identity(item: Any) -> Any:
     if isinstance(item, dict):
-        return {
+        identity = {
             key: item.get(key)
             for key in ("user_id", "source_row_index")
             if key in item
         }
+        raw_profile = item.get("raw_profile")
+        if isinstance(raw_profile, dict) and raw_profile.get("user_id") is not None:
+            identity["user_id"] = int(raw_profile["user_id"])
+        return identity
     return item

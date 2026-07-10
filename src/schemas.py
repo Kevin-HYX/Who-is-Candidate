@@ -15,7 +15,9 @@ from .constants import (
     HARD_CONSTRAINT_OPERATORS,
     INDUSTRY_VALUES,
     MANAGEMENT_SCOPE_RANK,
+    MAX_ABS_SOFT_WEIGHT,
     MAX_TOP_K,
+    MIN_ABS_SOFT_WEIGHT,
     PREPROCESS_PROMPT_FILE,
     ROLE_FAMILY_VALUES,
     SEARCHABLE_DIMENSIONS,
@@ -195,9 +197,18 @@ def search_tool_schema() -> dict[str, Any]:
             "text": {"type": "string", "minLength": 4},
             "weight": {
                 "type": "number",
-                "minimum": -3.0,
-                "maximum": 3.0,
-                "not": {"const": 0},
+                "minimum": -MAX_ABS_SOFT_WEIGHT,
+                "maximum": MAX_ABS_SOFT_WEIGHT,
+                "anyOf": [
+                    {
+                        "minimum": -MAX_ABS_SOFT_WEIGHT,
+                        "maximum": -MIN_ABS_SOFT_WEIGHT,
+                    },
+                    {
+                        "minimum": MIN_ABS_SOFT_WEIGHT,
+                        "maximum": MAX_ABS_SOFT_WEIGHT,
+                    },
+                ],
             },
         },
     }
@@ -618,10 +629,15 @@ def _validate_soft_preference(index: int, item: Any) -> dict[str, Any]:
             f"weighted_soft_preferences[{index}].weight must be numeric",
         )
     weight = float(weight)
-    if weight == 0 or weight < -3.0 or weight > 3.0:
+    if (
+        abs(weight) < MIN_ABS_SOFT_WEIGHT
+        or abs(weight) > MAX_ABS_SOFT_WEIGHT
+    ):
         raise CandidateSearchError(
             "INVALID_WEIGHT",
-            f"weighted_soft_preferences[{index}].weight must be in [-3.0, 3.0] and not 0",
+            f"weighted_soft_preferences[{index}].weight must be in "
+            f"[-{MAX_ABS_SOFT_WEIGHT}, -{MIN_ABS_SOFT_WEIGHT}] or "
+            f"[{MIN_ABS_SOFT_WEIGHT}, {MAX_ABS_SOFT_WEIGHT}]",
             weight=weight,
         )
 

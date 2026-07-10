@@ -22,7 +22,8 @@ QueryPlan + options
   -> 查询侧文本实时 embedding，或使用 Retrieval Trial 保存的同模型查询向量
   -> 候选人侧向量内存暴力 cosine
   -> 幸存池内 percentile
-  -> weight * percentile 求和
+  -> 连续输入权重按绝对值总和归一化
+  -> effective_weight * percentile 求和
   -> 排名 + Top K 同 rank 扩展
   -> SearchResult
 ```
@@ -41,28 +42,37 @@ Search readiness 不读取独立状态记录。它与 CLI `index-status`、MCP `
 - 无法高置信裁决：候选人保留，`hard_filter_status.status` 为 `kept_with_insufficient_evidence`，相关字段进入 `insufficient_evidence_fields`；
 - 全部明确满足：状态为 `passed`。
 
+`seniority_level` 的比较顺序固定为 `Internship < Entry level < Associate < Mid-Senior level < Director < Executive`。它只表示主要当前职位的组织层级；Manager 需求映射到 `Mid-Senior level`，实际管人要求必须另用 `management_scope` 表达。
+
+`medium` 与 `low` 在检索阶段行为完全相同：二者都不能硬淘汰，也不参与软分、权重或 tie-break。其区别只保留在 Preprocessed Profile 中供证据审计和 prompt 评测；`unknown` 是 value 状态而不是 confidence 档位。
+
 证据不足不扣分，也不通过 fallback 猜测成满足或违反。这一结果语义由 [ADR-0009](../adr/0009-return-structured-hard-filter-status.md) 固化；字段提取的当前机器行为见 [`_evaluate_hard_constraints` 与 `_extract_hard_value`](../../src/retrieval.py)。
 
 ## 第二轮：软排序
 
-每个软偏好选择一个可检索维度，提供具体工作内容文本与非零权重。正权重把相似候选人前推，负权重把相似候选人后移；不存在单独的 `avoid` interface。
+每个软偏好选择一个可检索维度，提供具体工作内容文本与连续实数权重。输入权重必须位于 `[-2.0, -0.1]` 或 `[0.1, 2.0]`；正权重把相似候选人前推，负权重把相似候选人后移，不存在单独的 `avoid` interface。输入权重只表达 QueryPlan 内部的相对比例，检索层负责公式计算，不要求 Agent 自行凑总和。
 
 ```text
 score_before_weight_i =
   count(other cosine < candidate cosine) / (survivor_count - 1)
 
-score_after_weight_i = round(weight_i * round(score_before_weight_i, 6), 6)
+effective_weight_i =
+  input_weight_i / sum(abs(all_input_weights))
+
+score_after_weight_i =
+  round(round(effective_weight_i, 6) * round(score_before_weight_i, 6), 6)
+
 final_score = sum(score_after_weight_i)
 ```
 
-单候选人幸存池的 percentile 为 `1.0`。raw cosine 不对外暴露；排名按 `final_score` 降序，并以 `user_id` 作为确定性排序键，同分采用 `1, 2, 2, 4` 形式的 rank。
+归一化后 `sum(abs(effective_weight)) == 1`，因此总分尺度不会随偏好数量或输入权重整体放大。单候选人幸存池的 percentile 为 `1.0`。候选人的某个软维度为 `not_provided` 时不生成该维度向量，该项 percentile 和加权贡献均为 `0`，候选人仍参与其他维度排序。raw cosine 不对外暴露；排名按 `final_score` 降序，并以 `user_id` 作为确定性排序键，同分采用 `1, 2, 2, 4` 形式的 rank。
 
 ## SearchResult 语义
 
 SearchResult 只暴露足以审计检索的 interface：
 
 - `search_meta` 描述 raw/index 覆盖、硬筛幸存数、请求与实际返回数、归一方式和公式；
-- `results[]` 提供 `rank`、`user_id`、`final_score`、结构化 `hard_filter_status`、逐偏好数值贡献和原始 `raw_profile`；
+- `results[]` 提供 `rank`、`user_id`、`final_score`、结构化 `hard_filter_status`、逐偏好的归一化实际权重与数值贡献，以及原始 `raw_profile`；
 - `raw_profile` 始终返回，解释者只能据此陈述候选人事实；排序分不是绝对能力分。
 
 部分索引允许搜索，但必须通过 metadata 暴露覆盖情况，见 [ADR-0004](../adr/0004-allow-partial-index-search-with-metadata.md)。`top_k` 是 best-effort：若第 K 位与后续候选人同 rank，完整返回该 rank，见 [ADR-0005](../adr/0005-top-k-is-a-best-effort-limit.md)。完整返回 shape 以 [`search_candidates`](../../src/retrieval.py) 为准，不在本文维护第二份字段表。

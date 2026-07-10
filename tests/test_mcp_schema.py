@@ -28,6 +28,16 @@ class McpSchemaTests(unittest.TestCase):
         )
         self.assertFalse(hard_item["additionalProperties"])
         self.assertFalse(soft_item["additionalProperties"])
+        weight_schema = soft_item["properties"]["weight"]
+        self.assertEqual(weight_schema["minimum"], -2.0)
+        self.assertEqual(weight_schema["maximum"], 2.0)
+        self.assertEqual(
+            weight_schema["anyOf"],
+            [
+                {"minimum": -2.0, "maximum": -0.1},
+                {"minimum": 0.1, "maximum": 2.0},
+            ],
+        )
 
     def test_management_scope_schema_couples_operator_and_value_shape(self) -> None:
         hard_item = (
@@ -50,6 +60,29 @@ class McpSchemaTests(unittest.TestCase):
         }
         self.assertEqual(value_types_by_operators[("in", "not_in")], "array")
         self.assertEqual(value_types_by_operators[("<=", "=", ">=")], "string")
+
+    def test_search_schema_exposes_six_position_levels(self) -> None:
+        hard_item = (
+            search_tool_schema()["inputSchema"]["properties"]["query_plan"]
+            ["properties"]["hard_constraints"]["items"]
+        )
+        seniority_rule = next(
+            condition
+            for condition in hard_item["allOf"]
+            if condition["if"]["properties"].get("field", {}).get("const")
+            == "seniority_level"
+        )
+        self.assertEqual(
+            seniority_rule["then"]["properties"]["value"]["enum"],
+            [
+                "Internship",
+                "Entry level",
+                "Associate",
+                "Mid-Senior level",
+                "Director",
+                "Executive",
+            ],
+        )
 
     def test_help_is_loaded_from_markdown(self) -> None:
         text = help_text()

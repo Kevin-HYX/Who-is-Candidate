@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ from .constants import (
     HARD_CONSTRAINT_FIELDS,
     INDUSTRY_VALUES,
     MANAGEMENT_SCOPE_RANK,
+    MISSING_SEARCH_TEXT,
     PREPROCESS_ERRORS_FILE,
     PREPROCESS_INFERRED_HARD_FIELDS,
     PREPROCESS_OUTPUT_FIELDS,
@@ -39,6 +41,7 @@ from .schemas import (
     RuntimeConfig,
     is_english_generated_text,
 )
+from .run_log import AttemptFailure, RunEventWriter, raw_model_output
 
 
 def preprocess_profiles(
@@ -51,6 +54,8 @@ def preprocess_profiles(
     model_client: Any | None = None,
     prompt_path: Path | None = None,
     discard_cache: bool = False,
+    event_writer: RunEventWriter | None = None,
+    event_phase: str = "preprocess",
 ) -> dict[str, Any]:
     build_workspace = workspace or config.build_workspace()
     raw_dataset = load_raw_dataset(build_workspace.raw_profiles_path)
@@ -87,8 +92,8 @@ def preprocess_profiles(
     ]
     if not discard_cache:
         skipped = [
-            raw_profile
-            for _, raw_profile in selected
+            {"source_row_index": source_row_index, "raw_profile": raw_profile}
+            for source_row_index, raw_profile in selected
             if _has_current_preprocess_cache(
                 existing,
                 raw_profile,
@@ -96,6 +101,15 @@ def preprocess_profiles(
                 model_hash=model_hash,
             )
         ]
+        if event_writer is not None:
+            for item in skipped:
+                event_writer.emit(
+                    "item_skipped",
+                    phase=event_phase,
+                    source_row_index=item["source_row_index"],
+                    user_id=int(item["raw_profile"]["user_id"]),
+                    reason="current_preprocess_cache",
+                )
 
     invalidated_user_ids = {
         int(item["raw_profile"]["user_id"])
@@ -124,9 +138,25 @@ def preprocess_profiles(
         raw_profile = item["raw_profile"]
         source_row_index = item["source_row_index"]
         llm_output = client.preprocess_profile(prompt, raw_profile)
-        validate_preprocess_model_output(llm_output)
+        try:
+            validate_preprocess_model_output(llm_output)
+        except ValueError as exc:
+            raise AttemptFailure(
+                exc,
+                stage=_preprocess_validation_stage(str(exc)),
+                error_code="PREPROCESS_OUTPUT_INVALID",
+                raw_output=raw_model_output(llm_output),
+            ) from exc
         preprocessed_profile = _merge_formula_fields(raw_profile, llm_output)
-        _validate_preprocessed_profile(preprocessed_profile)
+        try:
+            _validate_preprocessed_profile(preprocessed_profile)
+        except ValueError as exc:
+            raise AttemptFailure(
+                exc,
+                stage="semantic_validation",
+                error_code="PREPROCESSED_PROFILE_INVALID",
+                raw_output=raw_model_output(llm_output),
+            ) from exc
         return {
             "user_id": int(raw_profile["user_id"]),
             "source_row_index": source_row_index,
@@ -142,9 +172,35 @@ def preprocess_profiles(
         worker,
         concurrency=concurrency,
         attempts=3,
+        event_writer=event_writer,
+        event_phase=event_phase,
+        default_error_code="PREPROCESS_ATTEMPT_FAILED",
     )
-    merge_write_jsonl_by_user_id(build_workspace.processed_dir / PROCESSED_PROFILES_FILE, successes)
-    write_latest_errors(build_workspace.processed_dir / PREPROCESS_ERRORS_FILE, errors)
+    profiles_path = build_workspace.processed_dir / PROCESSED_PROFILES_FILE
+    errors_path = build_workspace.processed_dir / PREPROCESS_ERRORS_FILE
+    try:
+        merge_write_jsonl_by_user_id(profiles_path, successes)
+        write_latest_errors(errors_path, errors)
+    except Exception as exc:  # noqa: BLE001 - surfaced as a run artifact failure.
+        raise AttemptFailure(
+            exc,
+            stage="artifact_write",
+            error_code="PREPROCESS_ARTIFACT_WRITE_FAILED",
+        ) from exc
+    if event_writer is not None:
+        event_writer.emit(
+            "artifact_written",
+            phase=event_phase,
+            artifact_kind="preprocessed_profiles",
+            artifact_path=profiles_path.name,
+        )
+        if errors_path.exists():
+            event_writer.emit(
+                "artifact_written",
+                phase=event_phase,
+                artifact_kind="preprocess_errors",
+                artifact_path=errors_path.name,
+            )
     status = get_index_status(config, build_workspace)
     if errors:
         raise CandidateSearchError(
@@ -159,6 +215,19 @@ def preprocess_profiles(
         "failed_count": 0,
         "status": status,
     }
+
+
+def _preprocess_validation_stage(message: str) -> str:
+    structural_markers = (
+        "must be a JSON object",
+        "must be an object",
+        "has invalid fields",
+        "missing hard fields",
+        "missing embedding search texts",
+    )
+    if any(marker in message for marker in structural_markers):
+        return "schema_validation"
+    return "semantic_validation"
 
 
 def _has_current_preprocess_cache(
@@ -253,7 +322,7 @@ def _years_of_experience(raw_profile: dict[str, Any]) -> dict[str, Any]:
             return {
                 "value": "unknown",
                 "unit": "years",
-                "confidence": "unknown",
+                "confidence": "low",
                 "source_field": "total_experience_duration_months",
                 "evidence": "not_provided",
             }
@@ -278,7 +347,7 @@ def _highest_degree_level(raw_profile: dict[str, Any]) -> dict[str, Any]:
     if not levels:
         return {
             "value": "unknown",
-            "confidence": "unknown",
+            "confidence": "low",
             "source_field": "education[].degree_level",
             "evidence": "not_provided",
         }
@@ -316,7 +385,7 @@ def _is_currently_working(raw_profile: dict[str, Any]) -> dict[str, Any]:
         }
     return {
         "value": "unknown",
-        "confidence": "unknown",
+        "confidence": "low",
         "source_field": "experience[].is_current",
         "evidence": "not_provided",
     }
@@ -333,7 +402,7 @@ def _current_role_tenure_months(raw_profile: dict[str, Any]) -> dict[str, Any]:
             }
     return {
         "value": None,
-        "confidence": "unknown",
+        "confidence": "low",
         "source_field": "experience[is_current].duration_months",
         "evidence": "not_provided",
     }
@@ -348,7 +417,7 @@ def _avg_tenure_months(raw_profile: dict[str, Any]) -> dict[str, Any]:
     if not durations:
         return {
             "value": None,
-            "confidence": "unknown",
+            "confidence": "low",
             "source_field": "experience[].duration_months",
             "evidence": "not_provided",
         }
@@ -419,6 +488,19 @@ def validate_preprocess_model_output(profile: Any) -> None:
             text,
             f"embedding_search_texts.{dimension}",
         )
+        normalized = " ".join(text.strip().lower().split())
+        if normalized != MISSING_SEARCH_TEXT and (
+            normalized in {"unknown", "insufficient_evidence"}
+            or re.search(
+                r"(?:^no (?:specific |explicit )?|^insufficient |^evidence is insufficient|"
+                r"without evidence|absence of evidence|not provided)",
+                normalized,
+            )
+        ):
+            raise ValueError(
+                f"embedding_search_texts.{dimension} must use {MISSING_SEARCH_TEXT!r} "
+                "instead of an absence statement"
+            )
 
 
 def _validate_inferred_hard_field(field: str, item: Any) -> None:
@@ -456,16 +538,15 @@ def _validate_inferred_hard_field(field: str, item: Any) -> None:
         raise AssertionError(f"unsupported inferred hard field: {field}")
 
     is_unknown = value == "unknown" or value == ["unknown"]
-    if is_unknown and confidence != "unknown":
-        raise ValueError(f"{path}.confidence must be unknown when value is unknown")
-    if not is_unknown and confidence == "unknown":
-        raise ValueError(f"{path}.confidence cannot be unknown for a concrete value")
+    if is_unknown and confidence == "high":
+        raise ValueError(f"{path}.confidence cannot be high when value is unknown")
     absence_states = {"unknown", "not_provided", "insufficient_evidence"}
-    if is_unknown and item["evidence"].strip() not in absence_states:
+    evidence = item["evidence"].strip()
+    if is_unknown and confidence == "medium" and evidence in absence_states:
         raise ValueError(
-            f"{path}.evidence must be an explicit absence state when value is unknown"
+            f"{path}.evidence must describe the conflicting or ambiguous evidence when value is unknown with medium confidence"
         )
-    if not is_unknown and item["evidence"].strip() in absence_states:
+    if not is_unknown and evidence in absence_states:
         raise ValueError(f"{path}.evidence does not support its concrete value")
 
 

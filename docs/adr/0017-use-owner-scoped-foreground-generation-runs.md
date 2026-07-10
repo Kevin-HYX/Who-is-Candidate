@@ -1,0 +1,3 @@
+# Use Owner-Scoped Foreground Generation Runs
+
+Evaluation model and retrieval commands run only in the foreground and expose one Generation Run per CLI invocation. A single thread-safe writer first appends and flushes each Run Event under the owning Test Sample, User Prompt Set, or Retrieval Trial and then streams the identical JSON object to stdout; failed raw model outputs live beside that Run, while latest error JSONL files remain the object's current error facts. This owner-scoped design preserves every retry and interruption without a daemon, global Run registry, duplicated status cache, or stdout/file ordering drift; combined sample build uses two phases inside one Run, and a Trial consumes its ID only after prerequisites and input snapshots succeed.

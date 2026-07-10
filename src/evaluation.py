@@ -8,7 +8,7 @@ import tempfile
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TextIO
 
 from .constants import (
     DEFAULT_CONCURRENCY,
@@ -24,11 +24,23 @@ from .constants import (
 from .preprocess import preprocess_profiles
 from .retrieval import (
     OpenAICompatibleModelClient,
+    _validate_embedding_vectors,
     build_index,
     canonical_hash,
     get_index_status,
     load_raw_dataset,
     search_candidates,
+)
+from .run_log import (
+    AttemptFailure,
+    RunEventWriter,
+    attempt_error_details,
+    list_runs,
+    original_attempt_error,
+    raw_model_output,
+    read_attempt_artifact,
+    read_run,
+    read_run_events,
 )
 from .schemas import (
     BuildWorkspace,
@@ -39,6 +51,111 @@ from .schemas import (
 
 BROWSE_DEFAULT_LIMIT = 20
 BROWSE_MAX_LIMIT = 200
+
+
+def _create_generation_run(
+    owner_dir: Path,
+    *,
+    owner_type: str,
+    owner_id: str,
+    command: str,
+    phases: list[str],
+    event_stream: TextIO | None,
+    parameters: dict[str, Any] | None = None,
+) -> RunEventWriter:
+    return RunEventWriter.create(
+        owner_dir,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        command=command,
+        phases=phases,
+        stream=event_stream,
+        parameters=parameters,
+    )
+
+
+def _execute_generation_run(
+    writer: RunEventWriter,
+    operation: Callable[[], dict[str, Any]],
+) -> dict[str, Any]:
+    writer.emit(
+        "run_started",
+        command=writer.metadata["command"],
+        owner_type=writer.metadata["owner_type"],
+        owner_id=writer.metadata["owner_id"],
+        phases=writer.metadata["phases"],
+    )
+    try:
+        result = operation()
+    except KeyboardInterrupt as exc:
+        writer.emit("run_interrupted", message=str(exc) or "interrupted")
+        raise
+    except Exception as exc:
+        writer.emit("run_failed", **_exception_event_fields(exc))
+        raise
+    writer.emit("run_completed", summary=_compact_summary(result))
+    return result
+
+
+def _execute_phase(
+    writer: RunEventWriter,
+    phase: str,
+    operation: Callable[[], dict[str, Any]],
+) -> dict[str, Any]:
+    writer.emit("phase_started", phase=phase)
+    try:
+        result = operation()
+    except KeyboardInterrupt:
+        writer.emit("phase_completed", phase=phase, status="interrupted")
+        raise
+    except Exception as exc:
+        writer.emit(
+            "phase_completed",
+            phase=phase,
+            status="failed",
+            **_exception_event_fields(exc),
+        )
+        raise
+    failure_count = result.get("failed_count", result.get("error_count", 0))
+    status = "completed_with_errors" if failure_count else "completed"
+    writer.emit(
+        "phase_completed",
+        phase=phase,
+        status=status,
+        summary=_compact_summary(result),
+    )
+    return result
+
+
+def _exception_event_fields(exc: BaseException) -> dict[str, Any]:
+    if isinstance(exc, CandidateSearchError):
+        return {
+            "stage": "semantic_validation",
+            "error_code": exc.code,
+            "field_path": exc.details.get("field_path"),
+            "message": exc.message,
+        }
+    details = attempt_error_details(exc)
+    return {
+        "stage": details["stage"],
+        "error_code": details["error_code"],
+        "field_path": details["field_path"],
+        "message": details["message"],
+    }
+
+
+def _compact_summary(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _compact_summary(item)
+            for key, item in value.items()
+            if key != "status"
+            and (
+                isinstance(item, (str, int, float, bool, type(None)))
+                or key in {"preprocess", "build_index", "coverage"}
+            )
+        }
+    return value
 
 
 def create_test_sample(
@@ -199,6 +316,7 @@ def preprocess_test_sample(
     concurrency: int = DEFAULT_CONCURRENCY,
     model_client: Any | None = None,
     discard_cache: bool = False,
+    event_stream: TextIO | None = None,
 ) -> dict[str, Any]:
     sample_dir = _require_test_sample_dir(config, sample_id)
     prompt_path = sample_dir / "prompt_snapshot" / "preprosess.md"
@@ -208,13 +326,29 @@ def preprocess_test_sample(
             "test sample preprocess prompt snapshot is missing",
             sample_id=sample_id,
         )
-    return preprocess_profiles(
-        config,
-        workspace=_test_sample_workspace(sample_dir),
-        concurrency=concurrency,
-        model_client=model_client,
-        prompt_path=prompt_path,
-        discard_cache=discard_cache,
+    writer = _create_generation_run(
+        sample_dir,
+        owner_type="test_sample",
+        owner_id=sample_id,
+        command="test-sample-preprocess",
+        phases=["preprocess"],
+        event_stream=event_stream,
+        parameters={"concurrency": concurrency, "discard_cache": discard_cache},
+    )
+    return _execute_generation_run(
+        writer,
+        lambda: _execute_phase(
+            writer,
+            "preprocess",
+            lambda: _preprocess_test_sample_phase(
+                config,
+                sample_dir,
+                concurrency=concurrency,
+                model_client=model_client,
+                discard_cache=discard_cache,
+                writer=writer,
+            ),
+        ),
     )
 
 
@@ -225,14 +359,32 @@ def build_test_sample_index(
     concurrency: int = DEFAULT_CONCURRENCY,
     model_client: Any | None = None,
     discard_cache: bool = False,
+    event_stream: TextIO | None = None,
 ) -> dict[str, Any]:
     sample_dir = _require_test_sample_dir(config, sample_id)
-    return build_index(
-        config,
-        workspace=_test_sample_workspace(sample_dir),
-        concurrency=concurrency,
-        model_client=model_client,
-        discard_cache=discard_cache,
+    writer = _create_generation_run(
+        sample_dir,
+        owner_type="test_sample",
+        owner_id=sample_id,
+        command="test-sample-build-index",
+        phases=["build_index"],
+        event_stream=event_stream,
+        parameters={"concurrency": concurrency, "discard_cache": discard_cache},
+    )
+    return _execute_generation_run(
+        writer,
+        lambda: _execute_phase(
+            writer,
+            "build_index",
+            lambda: _build_test_sample_index_phase(
+                config,
+                sample_dir,
+                concurrency=concurrency,
+                model_client=model_client,
+                discard_cache=discard_cache,
+                writer=writer,
+            ),
+        ),
     )
 
 
@@ -243,25 +395,95 @@ def build_test_sample(
     concurrency: int = DEFAULT_CONCURRENCY,
     model_client: Any | None = None,
     discard_cache: bool = False,
+    event_stream: TextIO | None = None,
 ) -> dict[str, Any]:
-    preprocess_result = preprocess_test_sample(
+    sample_dir = _require_test_sample_dir(config, sample_id)
+    prompt_path = sample_dir / "prompt_snapshot" / "preprosess.md"
+    if not prompt_path.exists():
+        raise CandidateSearchError(
+            "TEST_SAMPLE_PROMPT_NOT_FOUND",
+            "test sample preprocess prompt snapshot is missing",
+            sample_id=sample_id,
+        )
+    writer = _create_generation_run(
+        sample_dir,
+        owner_type="test_sample",
+        owner_id=sample_id,
+        command="test-sample-build",
+        phases=["preprocess", "build_index"],
+        event_stream=event_stream,
+        parameters={"concurrency": concurrency, "discard_cache": discard_cache},
+    )
+
+    def operation() -> dict[str, Any]:
+        preprocess_result = _execute_phase(
+            writer,
+            "preprocess",
+            lambda: _preprocess_test_sample_phase(
+                config,
+                sample_dir,
+                concurrency=concurrency,
+                model_client=model_client,
+                discard_cache=discard_cache,
+                writer=writer,
+            ),
+        )
+        index_result = _execute_phase(
+            writer,
+            "build_index",
+            lambda: _build_test_sample_index_phase(
+                config,
+                sample_dir,
+                concurrency=concurrency,
+                model_client=model_client,
+                discard_cache=discard_cache,
+                writer=writer,
+            ),
+        )
+        return {"preprocess": preprocess_result, "build_index": index_result}
+
+    return _execute_generation_run(writer, operation)
+
+
+def _preprocess_test_sample_phase(
+    config: Any,
+    sample_dir: Path,
+    *,
+    concurrency: int,
+    model_client: Any | None,
+    discard_cache: bool,
+    writer: RunEventWriter,
+) -> dict[str, Any]:
+    return preprocess_profiles(
         config,
-        sample_id,
+        workspace=_test_sample_workspace(sample_dir),
+        concurrency=concurrency,
+        model_client=model_client,
+        prompt_path=sample_dir / "prompt_snapshot" / "preprosess.md",
+        discard_cache=discard_cache,
+        event_writer=writer,
+        event_phase="preprocess",
+    )
+
+
+def _build_test_sample_index_phase(
+    config: Any,
+    sample_dir: Path,
+    *,
+    concurrency: int,
+    model_client: Any | None,
+    discard_cache: bool,
+    writer: RunEventWriter,
+) -> dict[str, Any]:
+    return build_index(
+        config,
+        workspace=_test_sample_workspace(sample_dir),
         concurrency=concurrency,
         model_client=model_client,
         discard_cache=discard_cache,
+        event_writer=writer,
+        event_phase="build_index",
     )
-    index_result = build_test_sample_index(
-        config,
-        sample_id,
-        concurrency=concurrency,
-        model_client=model_client,
-        discard_cache=discard_cache,
-    )
-    return {
-        "preprocess": preprocess_result,
-        "build_index": index_result,
-    }
 
 
 def create_user_prompt_set(
@@ -382,8 +604,44 @@ def map_user_prompt_set(
     *,
     model_client: Any | None = None,
     discard_cache: bool = False,
+    event_stream: TextIO | None = None,
 ) -> dict[str, Any]:
     set_dir = _require_user_prompt_set_dir(config, set_id)
+    writer = _create_generation_run(
+        set_dir,
+        owner_type="user_prompt_set",
+        owner_id=set_id,
+        command="user-prompt-set-map",
+        phases=["mapping"],
+        event_stream=event_stream,
+        parameters={"discard_cache": discard_cache},
+    )
+    return _execute_generation_run(
+        writer,
+        lambda: _execute_phase(
+            writer,
+            "mapping",
+            lambda: _map_user_prompt_set_phase(
+                config,
+                set_id,
+                set_dir,
+                model_client=model_client,
+                discard_cache=discard_cache,
+                writer=writer,
+            ),
+        ),
+    )
+
+
+def _map_user_prompt_set_phase(
+    config: Any,
+    set_id: str,
+    set_dir: Path,
+    *,
+    model_client: Any | None,
+    discard_cache: bool,
+    writer: RunEventWriter,
+) -> dict[str, Any]:
     _require_current_user_prompt_set_schema(set_dir, set_id)
     user_prompts = _read_jsonl_file(set_dir / "user_prompts.jsonl")
     query_guide = (set_dir / "prompt_snapshot" / "query.md").read_text(encoding="utf-8")
@@ -465,16 +723,37 @@ def map_user_prompt_set(
                 cached = None
             else:
                 skipped_count += 1
+                writer.emit(
+                    "item_skipped",
+                    phase="mapping",
+                    prompt_id=prompt_id,
+                    reason="current_query_plan_cache",
+                )
                 continue
         try:
-            output = _call_model_with_transport_retries(
-                lambda: client.generate_query_plan(
+            def generate_and_validate() -> Any:
+                output = client.generate_query_plan(
                     query_guide,
                     tool_schema,
                     prompt["text"],
                 )
+                try:
+                    return validate_generated_search_arguments(output)
+                except CandidateSearchError as exc:
+                    raise AttemptFailure(
+                        exc,
+                        stage=_query_validation_stage(exc),
+                        error_code=exc.code,
+                        raw_output=raw_model_output(output),
+                    ) from exc
+
+            request = _call_model_with_transport_retries(
+                generate_and_validate,
+                event_writer=writer,
+                phase="mapping",
+                item={"prompt_id": prompt_id},
+                default_error_code="QUERY_MODEL_REQUEST_FAILED",
             )
-            request = validate_generated_search_arguments(output)
             generated[prompt_id] = {
                 "prompt_id": prompt_id,
                 "user_prompt": prompt["text"],
@@ -487,8 +766,27 @@ def map_user_prompt_set(
                 "options": request.options,
             }
             generated_count += 1
+            writer.emit(
+                "item_succeeded",
+                phase="mapping",
+                prompt_id=prompt_id,
+            )
         except Exception as exc:  # noqa: BLE001 - persisted for Agent review.
             generated.pop(prompt_id, None)
+            original = original_attempt_error(exc)
+            attempt_details = attempt_error_details(
+                exc,
+                default_error_code="QUERY_MODEL_REQUEST_FAILED",
+            )
+            writer.emit(
+                "item_failed",
+                phase="mapping",
+                prompt_id=prompt_id,
+                stage=attempt_details["stage"],
+                error_code=attempt_details["error_code"],
+                field_path=attempt_details["field_path"],
+                message=attempt_details["message"],
+            )
             error = {
                 "prompt_id": prompt_id,
                 "user_prompt_hash": user_prompt_hash,
@@ -496,13 +794,13 @@ def map_user_prompt_set(
                 "tool_schema_hash": tool_schema_hash,
                 "model_config_hash": model_config_hash,
                 "query_schema_version": QUERY_SCHEMA_VERSION,
-                "error_type": type(exc).__name__,
-                "message": str(exc),
+                "error_type": type(original).__name__,
+                "message": str(original),
             }
-            if isinstance(exc, CandidateSearchError):
-                error["code"] = exc.code
-                error["details"] = exc.details
-            elif _is_retryable_model_transport_error(exc):
+            if isinstance(original, CandidateSearchError):
+                error["code"] = original.code
+                error["details"] = original.details
+            elif _is_retryable_model_transport_error(original):
                 error["code"] = "QUERY_MODEL_REQUEST_FAILED"
             else:
                 error["code"] = "INVALID_QUERY_SCHEMA_OUTPUT"
@@ -513,9 +811,29 @@ def map_user_prompt_set(
         for prompt_id in prompt_order
         if prompt_id in generated
     ]
-    _write_jsonl_file(generated_path, ordered_generated)
-    if errors:
-        _write_jsonl_file(errors_path, errors)
+    try:
+        _write_jsonl_file(generated_path, ordered_generated)
+        if errors:
+            _write_jsonl_file(errors_path, errors)
+    except Exception as exc:  # noqa: BLE001 - surfaced as a run artifact failure.
+        raise AttemptFailure(
+            exc,
+            stage="artifact_write",
+            error_code="MAPPING_ARTIFACT_WRITE_FAILED",
+        ) from exc
+    writer.emit(
+        "artifact_written",
+        phase="mapping",
+        artifact_kind="generated_query_plans",
+        artifact_path=generated_path.name,
+    )
+    if errors_path.exists():
+        writer.emit(
+            "artifact_written",
+            phase="mapping",
+            artifact_kind="mapping_errors",
+            artifact_path=errors_path.name,
+        )
 
     result = _calculate_user_prompt_set_status(config, set_dir, set_id)
     result["generated_count"] = generated_count
@@ -530,6 +848,7 @@ def run_retrieval_trial(
     sample_id: str,
     user_prompt_set_id: str,
     model_client: Any | None = None,
+    event_stream: TextIO | None = None,
 ) -> dict[str, Any]:
     sample_dir = _require_ready_test_sample(config, sample_id)
     prompt_set_dir = _require_ready_user_prompt_set(config, user_prompt_set_id)
@@ -550,60 +869,10 @@ def run_retrieval_trial(
             prompt_set_snapshot_hash,
             input_files,
         ) = _snapshot_retrieval_trial_inputs(temporary_dir, sample_dir, prompt_set_dir)
-        sample_snapshot_dir = temporary_dir / "input_snapshot" / "test_sample"
         prompt_set_snapshot_dir = temporary_dir / "input_snapshot" / "user_prompt_set"
         generated = _read_jsonl_file(
             prompt_set_snapshot_dir / "generated_query_plans.jsonl"
         )
-        sample_workspace = _test_sample_workspace(sample_snapshot_dir)
-        client = model_client or OpenAICompatibleModelClient(config)
-        search_results = []
-        errors = []
-        for mapping in generated:
-            prompt_id = mapping["prompt_id"]
-            options = dict(mapping.get("options", {}))
-            options["top_k"] = 10
-            try:
-                preferences = mapping["query_plan"]["weighted_soft_preferences"]
-                query_vectors = _call_model_with_transport_retries(
-                    lambda: client.embed_texts(
-                        [preference["text"] for preference in preferences]
-                    )
-                )
-                result = search_candidates(
-                    config,
-                    mapping["query_plan"],
-                    options,
-                    model_client=client,
-                    workspace=sample_workspace,
-                    query_vectors=query_vectors,
-                )
-                search_results.append(
-                    {
-                        "prompt_id": prompt_id,
-                        "query_plan": mapping["query_plan"],
-                        "options": options,
-                        "query_vectors": query_vectors,
-                        "search_result": result,
-                    }
-                )
-            except Exception as exc:  # noqa: BLE001 - persisted for Agent review.
-                error = {
-                    "prompt_id": prompt_id,
-                    "query_plan": mapping["query_plan"],
-                    "options": options,
-                    "error_type": type(exc).__name__,
-                    "message": str(exc),
-                }
-                if isinstance(exc, CandidateSearchError):
-                    error["code"] = exc.code
-                    error["details"] = exc.details
-                elif _is_retryable_model_transport_error(exc):
-                    error["code"] = "QUERY_EMBEDDING_REQUEST_FAILED"
-                errors.append(error)
-        _write_jsonl_file(temporary_dir / "search_results.jsonl", search_results)
-        if errors:
-            _write_jsonl_file(temporary_dir / "retrieval_errors.jsonl", errors)
         metadata = {
             "trial_id": trial_id,
             "sample_id": sample_id,
@@ -626,12 +895,177 @@ def run_retrieval_trial(
             "retrieval_version": RETRIEVAL_VERSION,
         }
         _write_json_file(temporary_dir / "trial.json", metadata)
-        os.replace(temporary_dir, trial_dir)
-        return read_retrieval_trial(config, trial_id)
-    except Exception:
+        temporary_dir.rename(trial_dir)
+    except BaseException:
         if temporary_dir.exists():
             shutil.rmtree(temporary_dir)
         raise
+
+    writer = _create_generation_run(
+        trial_dir,
+        owner_type="retrieval_trial",
+        owner_id=trial_id,
+        command="retrieval-trial-run",
+        phases=["retrieval"],
+        event_stream=event_stream,
+        parameters={
+            "sample_id": sample_id,
+            "user_prompt_set_id": user_prompt_set_id,
+            "top_k": 10,
+        },
+    )
+    return _execute_generation_run(
+        writer,
+        lambda: _execute_phase(
+            writer,
+            "retrieval",
+            lambda: _run_retrieval_trial_phase(
+                config,
+                trial_id,
+                trial_dir,
+                model_client=model_client,
+                writer=writer,
+            ),
+        ),
+    )
+
+
+def _run_retrieval_trial_phase(
+    config: Any,
+    trial_id: str,
+    trial_dir: Path,
+    *,
+    model_client: Any | None,
+    writer: RunEventWriter,
+) -> dict[str, Any]:
+    sample_snapshot_dir = trial_dir / "input_snapshot" / "test_sample"
+    prompt_set_snapshot_dir = trial_dir / "input_snapshot" / "user_prompt_set"
+    generated = _read_jsonl_file(
+        prompt_set_snapshot_dir / "generated_query_plans.jsonl"
+    )
+    sample_workspace = _test_sample_workspace(sample_snapshot_dir)
+    client = model_client or OpenAICompatibleModelClient(config)
+    search_results = []
+    errors = []
+    writer.emit(
+        "artifact_written",
+        phase="retrieval",
+        artifact_kind="trial_identity",
+        artifact_path="trial.json",
+    )
+    writer.emit(
+        "artifact_written",
+        phase="retrieval",
+        artifact_kind="input_snapshot",
+        artifact_path="input_snapshot",
+    )
+    for mapping in generated:
+        prompt_id = mapping["prompt_id"]
+        options = dict(mapping.get("options", {}))
+        options["top_k"] = 10
+        try:
+            preferences = mapping["query_plan"]["weighted_soft_preferences"]
+
+            def embed_and_validate() -> list[list[float]]:
+                query_vectors = client.embed_texts(
+                    [preference["text"] for preference in preferences]
+                )
+                try:
+                    _validate_embedding_vectors(
+                        query_vectors,
+                        expected_count=len(preferences),
+                        context="query embedding",
+                    )
+                except ValueError as exc:
+                    raise AttemptFailure(
+                        exc,
+                        stage="embedding_validation",
+                        error_code="QUERY_EMBEDDING_VALIDATION_FAILED",
+                        raw_output=query_vectors,
+                    ) from exc
+                return query_vectors
+
+            query_vectors = _call_model_with_transport_retries(
+                embed_and_validate,
+                event_writer=writer,
+                phase="retrieval",
+                item={"prompt_id": prompt_id},
+                default_error_code="QUERY_EMBEDDING_REQUEST_FAILED",
+            )
+            result = search_candidates(
+                config,
+                mapping["query_plan"],
+                options,
+                model_client=client,
+                workspace=sample_workspace,
+                query_vectors=query_vectors,
+            )
+            search_results.append(
+                {
+                    "prompt_id": prompt_id,
+                    "query_plan": mapping["query_plan"],
+                    "options": options,
+                    "query_vectors": query_vectors,
+                    "search_result": result,
+                }
+            )
+            writer.emit("item_succeeded", phase="retrieval", prompt_id=prompt_id)
+        except Exception as exc:  # noqa: BLE001 - persisted for Agent review.
+            original = original_attempt_error(exc)
+            details = attempt_error_details(
+                exc,
+                default_error_code="QUERY_EMBEDDING_REQUEST_FAILED",
+            )
+            writer.emit(
+                "item_failed",
+                phase="retrieval",
+                prompt_id=prompt_id,
+                stage=details["stage"],
+                error_code=details["error_code"],
+                field_path=details["field_path"],
+                message=details["message"],
+            )
+            error = {
+                "prompt_id": prompt_id,
+                "query_plan": mapping["query_plan"],
+                "options": options,
+                "error_type": type(original).__name__,
+                "message": str(original),
+            }
+            if isinstance(original, CandidateSearchError):
+                error["code"] = original.code
+                error["details"] = original.details
+            elif _is_retryable_model_transport_error(original):
+                error["code"] = "QUERY_EMBEDDING_REQUEST_FAILED"
+            errors.append(error)
+    results_path = trial_dir / "search_results.jsonl"
+    errors_path = trial_dir / "retrieval_errors.jsonl"
+    try:
+        _write_jsonl_file(results_path, search_results)
+        if errors:
+            _write_jsonl_file(errors_path, errors)
+        elif errors_path.exists():
+            errors_path.unlink()
+    except Exception as exc:  # noqa: BLE001 - terminal run failure retains the trial.
+        raise AttemptFailure(
+            exc,
+            stage="artifact_write",
+            error_code="RETRIEVAL_ARTIFACT_WRITE_FAILED",
+        ) from exc
+    writer.emit(
+        "artifact_written",
+        phase="retrieval",
+        artifact_kind="search_results",
+        artifact_path=results_path.name,
+    )
+    if errors_path.exists():
+        writer.emit(
+            "artifact_written",
+            phase="retrieval",
+            artifact_kind="retrieval_errors",
+            artifact_path=errors_path.name,
+        )
+    return read_retrieval_trial(config, trial_id)
 
 
 def _snapshot_retrieval_trial_inputs(
@@ -776,6 +1210,70 @@ def read_retrieval_trial_errors(
         offset=offset,
         limit=limit,
     )
+
+
+def list_generation_runs(
+    config: Any,
+    owner_type: str,
+    owner_id: str,
+) -> dict[str, Any]:
+    owner_dir = _require_run_owner_dir(config, owner_type, owner_id)
+    result = list_runs(owner_dir)
+    return {
+        "owner_type": owner_type,
+        "owner_id": owner_id,
+        **result,
+    }
+
+
+def read_generation_run(
+    config: Any,
+    owner_type: str,
+    owner_id: str,
+    run_id: str,
+) -> dict[str, Any]:
+    owner_dir = _require_run_owner_dir(config, owner_type, owner_id)
+    return read_run(owner_dir, run_id)
+
+
+def read_generation_run_events(
+    config: Any,
+    owner_type: str,
+    owner_id: str,
+    run_id: str,
+    *,
+    offset: int,
+    limit: int,
+) -> dict[str, Any]:
+    owner_dir = _require_run_owner_dir(config, owner_type, owner_id)
+    offset, limit = _validate_browse_page(offset, limit)
+    events = read_run_events(owner_dir, run_id)
+    items = events[offset : offset + limit]
+    return _browse_envelope(
+        object_type="generation_run",
+        object_id=run_id,
+        artifact="events",
+        artifact_status="available",
+        total_count=len(events),
+        offset=offset,
+        limit=limit,
+        items=items,
+    )
+
+
+def read_generation_attempt(
+    config: Any,
+    owner_type: str,
+    owner_id: str,
+    run_id: str,
+    artifact_path: str,
+) -> dict[str, Any]:
+    owner_dir = _require_run_owner_dir(config, owner_type, owner_id)
+    return {
+        "owner_type": owner_type,
+        "owner_id": owner_id,
+        **read_attempt_artifact(owner_dir, run_id, artifact_path),
+    }
 
 
 def _require_ready_test_sample(config: Any, sample_id: str) -> Path:
@@ -940,15 +1438,52 @@ def _mapping_cache_matches(
     )
 
 
-def _call_model_with_transport_retries(call: Any, attempts: int = 3) -> Any:
+def _call_model_with_transport_retries(
+    call: Any,
+    attempts: int = 3,
+    *,
+    event_writer: RunEventWriter | None = None,
+    phase: str = "generation",
+    item: dict[str, Any] | None = None,
+    default_error_code: str = "MODEL_REQUEST_FAILED",
+) -> Any:
     last_error = None
-    for _ in range(attempts):
+    identity = item or {}
+    for attempt in range(1, attempts + 1):
+        if event_writer is not None:
+            event_writer.emit(
+                "attempt_started",
+                phase=phase,
+                **identity,
+                attempt=attempt,
+                max_attempts=attempts,
+            )
         try:
-            return call()
+            result = call()
         except Exception as exc:  # noqa: BLE001 - retry only known transport failures.
-            if not _is_retryable_model_transport_error(exc):
+            if event_writer is not None:
+                event_writer.emit_attempt_failed(
+                    exc,
+                    phase=phase,
+                    item=identity,
+                    attempt=attempt,
+                    max_attempts=attempts,
+                    default_error_code=default_error_code,
+                )
+            original = original_attempt_error(exc)
+            if not _is_retryable_model_transport_error(original):
                 raise
             last_error = exc
+        else:
+            if event_writer is not None:
+                event_writer.emit(
+                    "attempt_succeeded",
+                    phase=phase,
+                    **identity,
+                    attempt=attempt,
+                    max_attempts=attempts,
+                )
+            return result
     assert last_error is not None
     raise last_error
 
@@ -960,6 +1495,17 @@ def _is_retryable_model_transport_error(exc: Exception) -> bool:
         "InternalServerError",
         "RateLimitError",
     }
+
+
+def _query_validation_stage(exc: CandidateSearchError) -> str:
+    structural_codes = {
+        "INVALID_QUERY_SCHEMA_OUTPUT",
+        "INVALID_QUERY_PLAN",
+        "INVALID_QUERY_PLAN_FIELD",
+        "INVALID_HARD_CONSTRAINT",
+        "INVALID_SOFT_PREFERENCE",
+    }
+    return "schema_validation" if exc.code in structural_codes else "semantic_validation"
 
 
 def _require_current_user_prompt_set_schema(set_dir: Path, set_id: str) -> None:
@@ -1153,6 +1699,20 @@ def _require_retrieval_trial_dir(config: Any, trial_id: str) -> Path:
             trial_id=trial_id,
         )
     return trial_dir
+
+
+def _require_run_owner_dir(config: Any, owner_type: str, owner_id: str) -> Path:
+    if owner_type == "test_sample":
+        return _require_test_sample_dir(config, owner_id)
+    if owner_type == "user_prompt_set":
+        return _require_user_prompt_set_dir(config, owner_id)
+    if owner_type == "retrieval_trial":
+        return _require_retrieval_trial_dir(config, owner_id)
+    raise CandidateSearchError(
+        "INVALID_RUN_OWNER_TYPE",
+        "run owner type must be test_sample, user_prompt_set, or retrieval_trial",
+        owner_type=owner_type,
+    )
 
 
 def _test_sample_workspace(sample_dir: Path) -> BuildWorkspace:

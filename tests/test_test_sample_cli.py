@@ -32,7 +32,7 @@ class FakeTestSampleModelClient:
                     "evidence": raw_profile["headline"],
                 },
                 "seniority_level": {
-                    "value": "Specialist",
+                    "value": "Associate",
                     "confidence": "high",
                     "source_field": "headline",
                     "evidence": raw_profile["headline"],

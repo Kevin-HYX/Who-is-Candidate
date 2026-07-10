@@ -42,14 +42,14 @@ Use `confidence` as exactly one of: `high`, `medium`, `low`.
 
 Only `high` authorizes hard elimination. `medium` and `low` never affect filtering, ranking, weighting, or tie-breaking; their distinction exists only for evidence review and prompt evaluation.
 
-An `unknown` value may use `medium` when substantial evidence is conflicting or supports multiple plausible values; its `evidence` must describe that conflict or ambiguity. Use `low` when evidence is absent or too weak. For `unknown` with `low`, `evidence` may be an explicit state such as `unknown`, `not_provided`, or `insufficient_evidence`, or a concise evidence-grounded explanation of why the profile is insufficient. An `unknown` value can never use `high`.
+An `unknown` value may use `medium` when substantial evidence is conflicting or supports multiple plausible values; its `evidence` must describe that conflict or ambiguity. Use `low` when evidence is absent or too weak, with `evidence` equal to `unknown`, `not_provided`, or `insufficient_evidence`. An `unknown` value can never use `high`.
 
 Apply these field-specific thresholds before assigning `high`:
 
 - `role_family`: an explicit and unambiguous title, source role, or responsibility directly establishes one canonical work function. Employer industry, education, skills, or a generic title alone cannot establish `high`.
 - `seniority_level`: only the Primary Current Position can establish the current position level. `high` requires either a recognized standardized level for that position or an unambiguous current title that directly satisfies one of the six rules below. Historical positions, career length, professional capability, education, credentials, achievements, and missing evidence cannot establish `high`.
 - `management_scope`: explicit evidence establishes project leadership, direct reports, team supervision, budget or policy authority, or organizational decision rights. A title containing `Manager`, `Director`, `Lead`, `Owner`, or another seniority term alone cannot establish `high` management scope.
-- `industries`: An explicit `experience[].industry` value must deterministically map to every returned top-level industry before confidence can be `high`. Skills, education, job function, company name, company tags, employer reputation, or industry stereotypes cannot establish `high`. They may support `medium` when the mapping is plausible but not hard-filter safe. If multiple industries are returned, every item must independently meet the `high` threshold for the array to be `high`.
+- `industries`: explicit `experience[].industry`, an authoritative employer classification, or clearly described operating context directly supports every returned top-level industry. Skills, education, job function, company name alone, or industry stereotypes cannot establish `high`. If multiple industries are returned, every item must independently meet the `high` threshold for the array to be `high`.
 
 If a field does not meet its field-specific `high` threshold, use `medium` or `low` even when the proposed value seems likely.
 
@@ -143,7 +143,7 @@ Use `high` only when the selected current position and the rule for the returned
 
 Use the exact English spelling and punctuation above. Map raw child industries and source-specific labels to their top-level parent instead of copying them. Examples: `Higher Education` maps to `Education`; `Software Development` maps to `Technology, Information and Media`; `Facilities Services` maps to `Administrative and Support Services`; `Music` or `Performing Arts` maps to `Entertainment Providers`; and `Real Estate` maps to `Real Estate and Equipment Rental Services`. Do not output free labels such as `Healthcare`, `Technology`, `Medical Services`, `Equipment Rental`, `Non-profit`, `Automotive`, or `Environmental Consulting`. Preserve multiple top-level industries only when separate experience evidence supports each one. Use `["unknown"]` if there is not enough evidence for any canonical industry.
 
-For every non-formula inferred field, include `confidence`, `source_field`, and non-empty `evidence`. If evidence is missing, use an `unknown` value with `low` confidence. Its evidence may use an explicit absence state or briefly explain which required evidence the profile does not provide; exact absence wording is not required. Never treat a missing field as a negative fact.
+For every non-formula inferred field, include `confidence`, `source_field`, and `evidence`. If evidence is missing, use an `unknown` value with `low` confidence and evidence equal to `unknown`, `not_provided`, or `insufficient_evidence`; never treat a missing field as a negative fact.
 
 `embedding_search_texts` must include all of:
 
@@ -155,58 +155,43 @@ For every non-formula inferred field, include `confidence`, `source_field`, and 
 - `achievements_search_text`
 - `education_search_text`
 
-Build each candidate-side search text for the matching query-side soft-preference dimension. The goal is retrieval enrichment, not biography rewriting. You may add useful occupational vocabulary within the controlled rules below, but you must not turn a plausible role association into a claim that this candidate actually performed an action.
+Build each candidate-side search text for the matching query-side soft-preference dimension:
 
 | Search text | Write this content | Exclude this content |
 |---|---|---|
-| `responsibilities_search_text` | Explicit duties from descriptions or summaries. For an unambiguous title, you may add a canonical occupational concept as neutral retrieval terminology. | Turning a title-derived concept into an action the candidate performed; seniority, employer industry, or outcomes alone. |
-| `skills_search_text` | Explicit tools, methods, systems, and skills. You may normalize abbreviations and add direct synonyms; identify courses as coursework rather than applied skill. | Claiming that a listed skill or course was applied in work without application evidence; generic traits and duplicated keywords. |
+| `responsibilities_search_text` | Evidence-backed recurring duties, actions, service objects, and what the candidate actually did. | Bare job titles, seniority alone, employer industry alone, or outcome-only claims. |
+| `skills_search_text` | Named tools, methods, systems, technical skills, and evidence-backed ways the candidate applied them. | Generic traits, UI noise, repeated keywords, and unexplained skill-list copying. |
 | `experience_search_text` | Concrete projects, use cases, delivery patterns, and types of prior experience. | Total career years, vague experience claims, and invented projects. |
-| `domain_search_text` | Explicit candidate operating contexts. Employer industry may be included only as attributed employment context. | Converting employer tags, company reputation, education, or skills into the candidate's personal domain expertise. |
-| `ownership_search_text` | Explicit participation, ownership, workstream leadership, people management, and decision authority. | Inferring authority, direct reports, budgets, or decisions from Owner, Manager, Director, Lead, or another title alone. |
+| `domain_search_text` | Specific industries, business processes, customer types, products, regulatory settings, and operating contexts. | Job titles, generic skills, or only a broad industry label when more specific context exists. |
+| `ownership_search_text` | Evidence of participation, ownership, workstream leadership, people management, and decision authority. | Seniority title alone or unsupported claims of leadership. |
 | `achievements_search_text` | Explicit outputs, improvements, launches, growth, savings, quality changes, or other evidenced impact. | Routine duties presented as achievements and any invented metric. |
 | `education_search_text` | Degree, major, field of study, coursework, certification, license, and relevant education context. | Unrelated work duties or claims that an absent credential does not exist. |
 
-Controlled enrichment rules:
+Search-text writing rules:
 
-1. Every generated clause must be either an explicit candidate fact or a canonical occupational concept derived from one unambiguous title.
-2. An explicit fact may use active verbs that preserve the source meaning. A canonical occupational concept must be a neutral noun phrase for retrieval, not as an action the candidate performed.
-3. Role-derived concepts are allowed only in `responsibilities_search_text` and `skills_search_text`. They cannot establish projects, applied tools, outcomes, authority, customers, scale, or specialized domains.
-4. Achievements and ownership require explicit candidate evidence. Never infer them from a title, seniority label, employer, skill, course, or missing evidence.
-5. Preserve exact source names and add direct synonyms, abbreviations, and parent concepts when useful. Do not strengthen verbs, scope, certainty, or impact.
-6. Do not combine unrelated fields into a new biographical claim. A title, skill, course, employer tag, and industry from different records must remain separately attributed rather than becoming one invented work story.
-7. Keep each dimension semantically focused. Remove generic praise, UI residue, duplicated keywords, and unsupported adjectives.
-8. If a dimension has no positive, retrieval-useful content, return exactly `not_provided`. Never write an absence sentence such as "No achievements were provided", "insufficient evidence", or "no management evidence". The indexer skips `not_provided` instead of embedding it.
-
-Source transformation boundaries:
-
-| Source | You may do | You must not do |
-|---|---|---|
-| Explicit `description` or `summary` | Faithfully paraphrase actions, objects, context, tools, and outcomes; add direct synonyms. | Add unmentioned authority, metrics, tools, customers, or results. |
-| Unambiguous title or source role | Normalize the title and add canonical occupational concepts as neutral noun phrases. | State that the candidate performed specific duties, managed people, or delivered outcomes. |
-| `skills[]` | Preserve and normalize listed skills and direct synonyms. | Turn a listed skill into applied experience, responsibility, industry, or achievement. |
-| Courses, education, certifications | Describe study, coursework, degrees, and credentials. | Use "applied", "implemented", "delivered", or another work-action verb without work evidence. |
-| `experience[].industry` | Describe an attributed employment context and map it to the official parent industry. | Claim personal domain expertise or specialized business-process experience from the industry label alone. |
-| Company name or company tags | Preserve useful employer identity when relevant to an explicit experience. | Infer a hard industry, personal capability, customer type, regulatory setting, or responsibility. |
-| `is_decision_maker` or explicit leadership text | Describe only the authority directly represented by that source. | Invent team size, budget, policy scope, reporting lines, or specific decisions. |
+1. Write natural, concrete descriptions of observable work. Prefer action + object + context, not a title or keyword list.
+2. Expand ambiguous titles such as Manager, Analyst, Associate, PM, and Lead only when profile evidence shows the actual work. Do not use industry stereotypes as evidence.
+3. Preserve exact tool, system, skill, certification, and business-process names found in the profile, but place them in an evidence-backed application context.
+4. Keep each dimension semantically focused. Do not repeat the same sentence across all seven fields.
+5. Remove generic words, UI residue, unsupported adjectives, and duplicated keywords.
+6. Do not invent projects, clients, responsibilities, tools, certifications, outcomes, or numbers.
+7. When direct evidence is sparse, use only conservative facts available from titles and structured fields. If no usable evidence exists for a dimension, state that evidence is insufficient without claiming the candidate lacks the attribute.
 
 Examples:
 
 | Dimension | Good candidate-side text | Counterexample | Why the counterexample is wrong |
 |---|---|---|---|
-| Responsibilities | Source title `Speech Language Pathologist` -> "Speech-language pathology; communication-disorder assessment and therapy." | "Evaluated and treated children with swallowing disorders." | The good text adds canonical role concepts as neutral terms; the counterexample invents performed actions, population, and condition. |
-| Skills | Source course `Python Predictive Analytics` -> "Coursework in Python predictive analytics." | "Applied Python predictive analytics to business data." | Coursework does not prove applied work experience. |
+| Responsibilities | "Managed hospital patient billing, claims follow-up, accounts receivable, reconciliation, and revenue-cycle issue resolution." | "Billing Manager" | A title does not describe the work. |
+| Skills | "Used Python and SQL to build data pipelines, backend services, and reporting automation." | "Python, SQL, management, responsible" | The keyword pile lacks application context and contains noise. |
 | Experience | "Delivered an ERP implementation from requirements and process mapping through migration, training, and launch." | "Experienced ERP professional" | Vague praise does not identify an experience pattern. |
-| Domain | Source industry `Hospitals and Health Care` -> "Employment context: hospitals and health care." | "Experienced in oncology, emergency care, and clinical operations." | An employer industry does not prove specialized personal experience. |
-| Ownership | Source text `led and managed the team` -> "Led and managed a team." | Source title `Nurse Manager` -> "Managed nursing staff, assigned work, and reviewed performance." | A title alone does not prove people-management actions. |
+| Domain | "Worked in hospital revenue-cycle operations involving patient billing, insurance claims, reimbursement, and healthcare compliance." | "Healthcare" | The broad label loses the specific business context. |
+| Ownership | "Directly supervised billing staff, assigned work, reviewed performance, and owned team delivery." | "Manager with strong leadership" | A title and unsupported trait do not establish ownership. |
 | Achievements | "Reduced denied claims by 18% through billing workflow changes." | "Achieved excellent results and major savings" | The counterexample is unsupported and non-specific. |
 | Education | "Bachelor's degree in Accounting; Certified Public Accountant credential listed in certifications." | "Highly educated finance expert" | The counterexample replaces source facts with subjective praise. |
 
 Before returning, verify that `role_family.value` and every item in `industries.value` belong to the exact allowed lists above, except for the explicit `unknown` absence state. Any other classification label makes the output invalid.
 
-Before returning JSON, audit every `high` value as if it could eliminate the candidate. For `role_family`, reject `high` when the classification depends on skills, education, employer industry, company name, or company tags rather than an explicit work-function source. For `industries`, verify that every returned label maps from an explicit `experience[].industry`; otherwise confidence cannot be `high`. For `seniority_level`, verify that the evidence names the Primary Current Position and satisfies exactly one six-level rule without using historical roles, years, credentials, or professional reputation. For `management_scope=none`, require explicit evidence of no project, people, or organizational leadership; no management description, a Specialist or individual-contributor title, and the absence of direct-report evidence do not authorize `high`.
-
-Before returning, audit each search-text clause. If it uses an action verb, identify the explicit description or summary that supports the action. If it comes only from a title, rewrite it as neutral occupational terminology. If it comes from a course, retain the word `coursework`. If it comes from an employer industry, retain attribution as employment context. If no positive content remains, use `not_provided`.
+Before returning JSON, audit every `high` value as if it could eliminate the candidate. For `seniority_level`, verify that the evidence names the Primary Current Position and satisfies exactly one six-level rule without using historical roles, years, credentials, or professional reputation. For `management_scope=none`, require explicit evidence of no project, people, or organizational leadership; no management description, a Specialist or individual-contributor title, and the absence of direct-report evidence do not authorize `high`.
 
 Return a JSON object shaped like this:
 
@@ -244,7 +229,7 @@ Return a JSON object shaped like this:
     "experience_search_text": "...",
     "domain_search_text": "...",
     "ownership_search_text": "...",
-    "achievements_search_text": "not_provided",
+    "achievements_search_text": "...",
     "education_search_text": "..."
   },
   "derived_fields": {},

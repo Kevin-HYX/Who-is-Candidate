@@ -25,14 +25,14 @@ def valid_model_output() -> dict:
                 "evidence": "Finance & Accounting",
             },
             "seniority_level": {
-                "value": "Specialist",
+                "value": "Associate",
                 "confidence": "medium",
                 "source_field": "experience[0].title",
                 "evidence": "Financial Analyst",
             },
             "management_scope": {
                 "value": "unknown",
-                "confidence": "unknown",
+                "confidence": "low",
                 "source_field": "experience[].description",
                 "evidence": "insufficient_evidence",
             },
@@ -67,6 +67,10 @@ class PreprocessValidationTests(unittest.TestCase):
         invalid_industry = valid_model_output()
         invalid_industry["hard_fields"]["industries"]["value"] = ["Higher Education"]
         invalid_outputs.append(invalid_industry)
+
+        legacy_seniority = valid_model_output()
+        legacy_seniority["hard_fields"]["seniority_level"]["value"] = "Specialist"
+        invalid_outputs.append(legacy_seniority)
 
         duplicate_industry = valid_model_output()
         duplicate_industry["hard_fields"]["industries"]["value"] = [
@@ -104,15 +108,27 @@ class PreprocessValidationTests(unittest.TestCase):
         inconsistent_unknown["hard_fields"]["management_scope"]["confidence"] = "high"
         invalid_outputs.append(inconsistent_unknown)
 
-        unsupported_unknown_evidence = valid_model_output()
-        unsupported_unknown_evidence["hard_fields"]["management_scope"]["evidence"] = (
-            "No management evidence was found."
+        legacy_unknown_confidence = valid_model_output()
+        legacy_unknown_confidence["hard_fields"]["management_scope"]["confidence"] = (
+            "unknown"
         )
-        invalid_outputs.append(unsupported_unknown_evidence)
+        invalid_outputs.append(legacy_unknown_confidence)
 
         empty_search_text = valid_model_output()
         empty_search_text["embedding_search_texts"]["domain_search_text"] = ""
         invalid_outputs.append(empty_search_text)
+
+        absence_sentence = valid_model_output()
+        absence_sentence["embedding_search_texts"]["achievements_search_text"] = (
+            "No specific achievements were provided in the profile."
+        )
+        invalid_outputs.append(absence_sentence)
+
+        legacy_absence_state = valid_model_output()
+        legacy_absence_state["embedding_search_texts"][
+            "achievements_search_text"
+        ] = "insufficient_evidence"
+        invalid_outputs.append(legacy_absence_state)
 
         for output in invalid_outputs:
             with self.subTest(output=output):
@@ -180,7 +196,48 @@ class PreprocessValidationTests(unittest.TestCase):
                 "is_currently_working"
             ]
             self.assertEqual(current_work["value"], "unknown")
-            self.assertEqual(current_work["confidence"], "unknown")
+            self.assertEqual(current_work["confidence"], "low")
+            self.assertEqual(
+                record["preprocessed_profile"]["hard_fields"][
+                    "years_of_experience"
+                ]["confidence"],
+                "low",
+            )
+            self.assertEqual(
+                record["preprocessed_profile"]["hard_fields"][
+                    "highest_degree_level"
+                ]["confidence"],
+                "low",
+            )
+
+    def test_unknown_inferred_value_accepts_medium_or_low_but_not_high(self) -> None:
+        medium_output = valid_model_output()
+        medium_output["hard_fields"]["management_scope"].update(
+            {
+                "confidence": "medium",
+                "source_field": "experience[].title, experience[].description",
+                "evidence": "Manager title conflicts with the absence of direct-report evidence.",
+            }
+        )
+        validate_preprocess_model_output(medium_output)
+
+        low_output = valid_model_output()
+        low_output["hard_fields"]["management_scope"]["evidence"] = (
+            "No explicit management-scope evidence is present in the profile."
+        )
+        validate_preprocess_model_output(low_output)
+
+        output = valid_model_output()
+        output["hard_fields"]["management_scope"]["confidence"] = "high"
+        with self.assertRaisesRegex(ValueError, "cannot be high"):
+            validate_preprocess_model_output(output)
+
+        medium_without_conflict = valid_model_output()
+        medium_without_conflict["hard_fields"]["management_scope"]["confidence"] = (
+            "medium"
+        )
+        with self.assertRaisesRegex(ValueError, "conflicting or ambiguous"):
+            validate_preprocess_model_output(medium_without_conflict)
 
     def test_invalid_model_output_is_retried_then_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

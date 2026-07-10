@@ -93,9 +93,9 @@ MCP 是只读查询面，不提供预处理、建索引、自动修复缓存或�
 ```text
 test/data/
   prompts/             # 可复用的 preprocess/query prompt artifacts
-  samples/             # sample.json、候选集合、prompt snapshot、构建产物和错误
-  user_prompt_sets/    # prompt_set.json、User Prompt、QueryPlan 映射和映射错误
-  retrieval_trials/    # trial.json、输入快照、检索结果和检索错误
+  samples/             # sample、构建产物、错误和 owner-scoped runs
+  user_prompt_sets/    # User Prompt、QueryPlan 映射、错误和 owner-scoped runs
+  retrieval_trials/    # trial、输入快照、检索结果、错误和 owner-scoped runs
 ```
 
 ### Test Sample
@@ -103,7 +103,7 @@ test/data/
 创建、重采样和查看对象：
 
 ```powershell
-python -m src.main test-sample-create --sample-id sample_a --sample-size 50 --seed 123 --preprocess-prompt test/data/prompts/preprocess_baseline_20260710_01.md --json
+python -m src.main test-sample-create --sample-id sample_a --sample-size 50 --seed 123 --preprocess-prompt test/data/prompts/preprocess_baseline_20260710_03.md --json
 python -m src.main test-sample-resample --sample-id sample_a --sample-size 50 --seed 456 --json
 python -m src.main test-sample-show --sample-id sample_a --json
 python -m src.main test-sample-list --json
@@ -112,12 +112,12 @@ python -m src.main test-sample-list --json
 分步或一键构建：
 
 ```powershell
-python -m src.main test-sample-preprocess --sample-id sample_a --concurrency 3 --json
-python -m src.main test-sample-build-index --sample-id sample_a --concurrency 3 --json
-python -m src.main test-sample-build --sample-id sample_a --concurrency 3 --json
+python -m src.main test-sample-preprocess --sample-id sample_a --concurrency 3
+python -m src.main test-sample-build-index --sample-id sample_a --concurrency 3
+python -m src.main test-sample-build --sample-id sample_a --concurrency 3
 ```
 
-这三个构建命令都支持 `--discard-cache` 强制重跑。创建时指定的 preprocess prompt 会复制进 Sample 的 `prompt_snapshot/`；后续运行只读 snapshot。`sample.json` 只保存 `sample_id`、样本大小、seed、创建时间等身份与溯源事实，不保存动态 build status。重采样会使该 Sample 已有的预处理和索引产物失效，后续状态由剩余 artifact 自动计算为 `missing` 或 `partial`。
+这三个构建命令都支持 `--discard-cache` 强制重跑。它们固定把 Run Event JSONL 实时写到 stdout，不使用 `--json` 开关；`test-sample-build` 是一个 Run，内部含 `preprocess`、`build_index` 两个 phase。创建时指定的 preprocess prompt 会复制进 Sample 的 `prompt_snapshot/`；后续运行只读 snapshot。`sample.json` 只保存 `sample_id`、样本大小、seed、创建时间等身份与溯源事实，不保存动态 build status。重采样会使该 Sample 已有的预处理和索引产物失效，但永久保留既有 Run 历史。
 
 分页读取产物：
 
@@ -130,13 +130,13 @@ python -m src.main test-sample-read-errors --sample-id sample_a --offset 0 --lim
 ### User Prompt Set
 
 ```powershell
-python -m src.main user-prompt-set-create --set-id set_a --user-prompts user_prompts.jsonl --query-prompt test/data/prompts/query_baseline_20260710_01.md --json
-python -m src.main user-prompt-set-map --set-id set_a --json
+python -m src.main user-prompt-set-create --set-id set_a --user-prompts user_prompts.jsonl --query-prompt test/data/prompts/query_baseline_20260710_02.md --json
+python -m src.main user-prompt-set-map --set-id set_a
 python -m src.main user-prompt-set-show --set-id set_a --json
 python -m src.main user-prompt-set-list --json
 ```
 
-`user-prompt-set-map` 支持 `--discard-cache`。创建时指定的 query prompt 会复制进 Prompt Set 的 `prompt_snapshot/`；`prompt_set.json` 只保存 ID、创建时间和输入溯源等不可变事实，映射阶段同时保存 tool schema、生成的 QueryPlan 和精确错误。`mapping_status`、mapped/failed 数量和 schema stale 状态实时计算；`generated_count`、`skipped_count` 只出现在本次 map 命令结果中，不长期持久化。
+`user-prompt-set-map` 支持 `--discard-cache`，并固定流式输出 Run Event JSONL。创建时指定的 query prompt 会复制进 Prompt Set 的 `prompt_snapshot/`；`prompt_set.json` 只保存 ID、创建时间和输入溯源等不可变事实，映射阶段同时保存 tool schema、生成的 QueryPlan 和精确错误。`mapping_status`、mapped/failed 数量和 schema stale 状态实时计算；`generated_count`、`skipped_count` 只出现在该 Run 的终态摘要中，不长期持久化为对象状态。
 
 Prompt Mapping 对连接、超时、限流和服务端错误最多串行尝试三次；Query JSON 或 schema 非法时不重试。两类失败使用不同错误代码，避免把网络故障误报为 prompt 输出错误。
 
@@ -151,7 +151,7 @@ python -m src.main user-prompt-set-read-errors --set-id set_a --offset 0 --limit
 只有 ready 的 Test Sample 和 ready 的 User Prompt Set 可用于 Retrieval Trial：
 
 ```powershell
-python -m src.main retrieval-trial-run --trial-id trial_a --sample-id sample_a --user-prompt-set-id set_a --json
+python -m src.main retrieval-trial-run --trial-id trial_a --sample-id sample_a --user-prompt-set-id set_a
 python -m src.main retrieval-trial-show --trial-id trial_a --json
 python -m src.main retrieval-trial-list --json
 python -m src.main retrieval-trial-read-results --trial-id trial_a --offset 0 --limit 20 --json
@@ -162,7 +162,26 @@ python -m src.main retrieval-trial-read-errors --trial-id trial_a --offset 0 --l
 
 每个 Trial 的 `input_snapshot/` 冻结实际使用的 Test Sample 和 User Prompt Set。`trial.json` 只保存 `trial_id`、引用对象、创建时间、逐文件/聚合输入 hash、Schema/模型/Retrieval Version 和预期查询数等不可变溯源；每条成功结果保存 QueryPlan、effective `top_k`、查询向量与 SearchResult，精确失败保存到 `retrieval_errors.jsonl`。`trial_status`、搜索/错误计数和覆盖情况在读取时从这些 artifact 实时计算。
 
-Trial 的查询 embedding 串行执行；模型传输错误最多尝试三次，不引入额外召回线程池。
+Trial 的查询 embedding 串行执行；模型传输错误最多尝试三次，不引入额外召回线程池。所有 prerequisite 和 snapshot 必须先通过，失败不会创建 Trial；开始执行后 Trial ID 即被消费，失败或中断仍保留身份、snapshot 和 Run 日志。
+
+### Run 实时输出与回读
+
+五个模型/检索执行命令的 stdout 是纯 JSONL。每行是一个完整事件，已先 flush 到所属对象的 `runs/<run_id>/events.jsonl`；普通错误信息只写 stderr。可以直接重定向 stdout，但重定向文件不是事实来源：
+
+```powershell
+python -m src.main test-sample-build --sample-id sample_a --concurrency 3 > live-events.jsonl
+```
+
+Run 只能通过所属对象读取，不存在全局列表：
+
+```powershell
+python -m src.main run-list --owner-type test-sample --owner-id sample_a --json
+python -m src.main run-show --owner-type test-sample --owner-id sample_a --run-id <run_id> --json
+python -m src.main run-events --owner-type test-sample --owner-id sample_a --run-id <run_id> --offset 0 --limit 50 --json
+python -m src.main run-attempt --owner-type test-sample --owner-id sample_a --run-id <run_id> --artifact attempts/<artifact_name> --json
+```
+
+`--owner-type` 只接受 `test-sample`、`user-prompt-set`、`retrieval-trial`。`run-events` 默认 `limit=20`、最大 `200`；`run-attempt` 只能读取对应 Run 的 `attempts/`，拒绝绝对路径和目录穿越。Run 历史默认永久保留，重采样、丢弃生成 cache 或 rerun 都不会删除它。
 
 ## 命令自检
 

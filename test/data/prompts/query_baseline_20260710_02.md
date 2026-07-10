@@ -177,7 +177,7 @@ Do not hard-filter on certificates, skills, locations, company type, team size, 
 
 - `dimension`: one searchable dimension from the table below
 - `text`: a positive, concrete description of the work, capability, context, ownership, outcome, or education to compare
-- `weight`: a finite real JSON number in `[-2.0, -0.1]` or `[0.1, 2.0]`
+- `weight`: a non-zero JSON number in `[-3.0, 3.0]`
 
 ### Choose the correct dimension
 
@@ -206,39 +206,19 @@ Follow all of these rules:
 
 ### Weight meaning
 
-Weights express continuous relative importance within this QueryPlan. They are not discrete levels. Values such as `0.63`, `1.27`, and `-1.42` are valid. The Tool computes the effective weight deterministically:
+Weights express relative importance within this QueryPlan:
 
-```text
-effective_weight_i = input_weight_i / sum(abs(all_input_weights))
-```
-
-The absolute effective weights therefore sum to `1.0`, so adding preferences or increasing every input weight cannot inflate the total score. The `weight` returned in each `soft_preference_scores` item is this effective normalized weight.
-
-Use these continuous ranges as guidance rather than as enumerated values:
-
-| Input-weight range | Meaning |
+| Weight pattern | Meaning |
 |---|---|
-| `0.1` to `0.5` | Secondary preference inferred from context or used only to refine otherwise similar candidates. |
-| Above `0.5` through `1.0` | Explicit user preference without strong priority language. `1.0` is the default for one preference. |
-| Above `1.0` through `1.5` | User explicitly says this preference is important, prioritized, or a major consideration. |
-| Above `1.5` through `2.0` | User explicitly identifies the single primary or most important soft ranking criterion. |
-| `-0.1` through `-0.75` | Mild avoid-style preference. |
-| Below `-0.75` through `-1.5` | Explicit strong avoid-style preference. |
-| Below `-1.5` through `-2.0` | Exceptional avoidance that cannot be represented by a supported hard condition; it still does not hard-eliminate a candidate. |
+| `1.0` | Normal positive preference; use when the user gives no special priority. |
+| `0.3` to `0.8` | Secondary positive preference or useful supporting signal. |
+| `1.2` to `2.0` | Explicitly prioritized positive preference. |
+| Above `2.0` up to `3.0` | Reserve for an overwhelmingly important ranking preference that still cannot be a hard condition. |
+| `-0.3` to `-0.8` | Mild avoid-style preference. |
+| `-1.0` to `-2.0` | Strong avoid-style preference. |
+| Below `-2.0` down to `-3.0` | Reserve for an overwhelmingly important exclusion-like preference that cannot be expressed as a supported hard condition. |
 
-Apply all of these boundaries:
-
-1. When there is only one soft preference, use `1.0`; any other positive input would normalize to the same effective weight.
-2. A preference inferred by the Agent rather than explicitly stated by the user cannot exceed `1.0`.
-3. An input weight above `1.0` requires explicit user priority language.
-4. At most one positive preference may exceed `1.5`.
-5. Use above `1.5` only when the user identifies a primary, most important, or core ranking criterion.
-6. Sparse dimensions such as achievements and ownership should not exceed `1.0` unless the user explicitly prioritizes them.
-7. A negative weight, including `-2.0`, is still a soft ranking signal and never substitutes for a supported hard exclusion.
-8. Do not duplicate one semantic need across preferences to accumulate effective weight.
-9. Omit any preference whose intended absolute weight would be below `0.1`.
-
-Relative ratios still matter before normalization: an input weight of `1.6` has twice the influence of `0.8` in the same QueryPlan. `weight` must never be `0`.
+Relative ratios matter: a weight of `1.6` contributes twice as much as `0.8`. Do not make every preference highly weighted. `weight` must never be `0`.
 
 ### Good examples and counterexamples
 

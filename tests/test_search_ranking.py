@@ -12,6 +12,7 @@ from src.constants import (
 )
 from src.retrieval import (
     _evaluate_hard_constraints,
+    _score_candidates,
     canonical_hash,
     embedding_model_hash,
     preprocess_model_hash,
@@ -28,6 +29,101 @@ class FakeModelClient:
 
 
 class SearchRankingTests(unittest.TestCase):
+    def test_continuous_input_weights_are_normalized_before_scoring(self) -> None:
+        scored = _score_candidates(
+            [
+                {
+                    "user_id": 1,
+                    "hard_filter_status": {"status": "passed"},
+                    "embedding_record": {
+                        "vectors": {
+                            "domain_search_text": [1.0, 0.0],
+                            "skills_search_text": [1.0, 0.0],
+                        }
+                    },
+                }
+            ],
+            [
+                {
+                    "dimension": "domain_search_text",
+                    "text": "hospital finance",
+                    "weight": 2.0,
+                },
+                {
+                    "dimension": "skills_search_text",
+                    "text": "financial systems",
+                    "weight": 1.0,
+                },
+            ],
+            [[1.0, 0.0], [1.0, 0.0]],
+        )
+
+        scores = scored[0]["soft_preference_scores"]
+        self.assertEqual([item["weight"] for item in scores], [0.666667, 0.333333])
+        self.assertEqual(scored[0]["final_score"], 1.0)
+
+    def test_missing_candidate_soft_dimension_scores_zero(self) -> None:
+        candidates = [
+            {
+                "user_id": 1,
+                "hard_filter_status": {"status": "passed"},
+                "embedding_record": {"vectors": {}},
+            },
+            {
+                "user_id": 2,
+                "hard_filter_status": {"status": "passed"},
+                "embedding_record": {
+                    "vectors": {"domain_search_text": [1.0, 0.0]}
+                },
+            },
+        ]
+
+        scored = _score_candidates(
+            candidates,
+            [
+                {
+                    "dimension": "domain_search_text",
+                    "text": "hospital finance",
+                    "weight": 1.0,
+                }
+            ],
+            [[1.0, 0.0]],
+        )
+
+        by_user_id = {item["user_id"]: item for item in scored}
+        self.assertEqual(by_user_id[1]["final_score"], 0.0)
+        self.assertEqual(by_user_id[2]["final_score"], 1.0)
+
+    def test_medium_and_low_confidence_never_authorize_hard_filtering(self) -> None:
+        constraint = {
+            "field": "role_family",
+            "op": "in",
+            "value": ["Finance & Accounting"],
+            "rationale": "The user requires a finance function.",
+        }
+        for confidence in ("medium", "low"):
+            with self.subTest(confidence=confidence):
+                result = _evaluate_hard_constraints(
+                    {
+                        "hard_fields": {
+                            "role_family": {
+                                "value": "Finance & Accounting",
+                                "confidence": confidence,
+                                "source_field": "experience[0].role",
+                                "evidence": "Finance & Accounting",
+                            }
+                        }
+                    },
+                    [constraint],
+                )
+                self.assertEqual(
+                    result,
+                    {
+                        "status": "kept_with_insufficient_evidence",
+                        "insufficient_evidence_fields": ["role_family"],
+                    },
+                )
+
     def test_role_family_hard_filter_reads_canonical_value_field(self) -> None:
         result = _evaluate_hard_constraints(
             {
@@ -205,7 +301,11 @@ class SearchRankingTests(unittest.TestCase):
                 score["score_after_weight"]
                 for score in candidate["soft_preference_scores"]
             )
-            self.assertEqual(contribution_sum, 0.999999)
+            self.assertEqual(
+                [score["weight"] for score in candidate["soft_preference_scores"]],
+                [0.333333, 0.333333, 0.333333],
+            )
+            self.assertEqual(contribution_sum, 0.333333)
             self.assertEqual(candidate["final_score"], contribution_sum)
 
 

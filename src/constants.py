@@ -3,14 +3,17 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "candidate-search.toml"
 
-PREPROCESS_SCHEMA_VERSION = "2026-07-10.5"
-EMBEDDING_INDEX_VERSION = "2026-07-10.5"
-QUERY_SCHEMA_VERSION = "2026-07-10.2"
-RETRIEVAL_VERSION = "2026-07-10.2"
+PREPROCESS_SCHEMA_VERSION = "2026-07-10.8"
+EMBEDDING_INDEX_VERSION = "2026-07-10.6"
+QUERY_SCHEMA_VERSION = "2026-07-10.4"
+RETRIEVAL_VERSION = "2026-07-10.3"
 
 DEFAULT_TOP_K = 20
 MAX_TOP_K = 75
 DEFAULT_CONCURRENCY = 3
+MISSING_SEARCH_TEXT = "not_provided"
+MIN_ABS_SOFT_WEIGHT = 0.1
+MAX_ABS_SOFT_WEIGHT = 2.0
 
 ROLE_FAMILY_VALUES = (
     "Administrative",
@@ -58,7 +61,7 @@ INDUSTRY_VALUES = (
     "Wholesale",
 )
 
-CONFIDENCE_VALUES = {"high", "medium", "low", "unknown"}
+CONFIDENCE_VALUES = {"high", "medium", "low"}
 PREPROCESS_INFERRED_HARD_FIELDS = {
     "role_family",
     "seniority_level",
@@ -104,14 +107,12 @@ HARD_CONSTRAINT_OPERATORS = {
 }
 
 SENIORITY_RANK = {
-    "Intern": 0,
-    "Specialist": 1,
-    "Senior": 2,
-    "Manager": 3,
+    "Internship": 0,
+    "Entry level": 1,
+    "Associate": 2,
+    "Mid-Senior level": 3,
     "Director": 4,
-    "President/VP": 5,
-    "C-Level": 6,
-    "Founder/Owner/Partner": 7,
+    "Executive": 5,
 }
 
 MANAGEMENT_SCOPE_RANK = {

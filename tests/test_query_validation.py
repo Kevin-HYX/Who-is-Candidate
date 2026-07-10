@@ -74,6 +74,47 @@ class QueryValidationTests(unittest.TestCase):
             )
         self.assertEqual(ctx.exception.code, "INVALID_HARD_CONSTRAINT_VALUE")
 
+    def test_accepts_six_position_levels_and_rejects_legacy_levels(self) -> None:
+        levels = (
+            "Internship",
+            "Entry level",
+            "Associate",
+            "Mid-Senior level",
+            "Director",
+            "Executive",
+        )
+        for level in levels:
+            with self.subTest(level=level):
+                validate_search_request(
+                    valid_plan(
+                        hard_constraints=[
+                            {
+                                "field": "seniority_level",
+                                "op": "=",
+                                "value": level,
+                                "rationale": "The user explicitly requires this position level.",
+                            }
+                        ]
+                    )
+                )
+
+        for legacy_level in ("Intern", "Specialist", "Senior", "Manager", "President/VP", "C-Level", "Founder/Owner/Partner"):
+            with self.subTest(legacy_level=legacy_level):
+                with self.assertRaises(CandidateSearchError) as ctx:
+                    validate_search_request(
+                        valid_plan(
+                            hard_constraints=[
+                                {
+                                    "field": "seniority_level",
+                                    "op": "=",
+                                    "value": legacy_level,
+                                    "rationale": "The user explicitly requires this position level.",
+                                }
+                            ]
+                        )
+                    )
+                self.assertEqual(ctx.exception.code, "INVALID_HARD_CONSTRAINT_VALUE")
+
     def test_rejects_zero_weight(self) -> None:
         with self.assertRaises(CandidateSearchError) as ctx:
             validate_search_request(
@@ -89,6 +130,43 @@ class QueryValidationTests(unittest.TestCase):
                 }
             )
         self.assertEqual(ctx.exception.code, "INVALID_WEIGHT")
+
+    def test_accepts_continuous_weight_within_bounded_range(self) -> None:
+        request = validate_search_request(
+            {
+                "hard_constraints": [],
+                "weighted_soft_preferences": [
+                    {
+                        "dimension": "domain_search_text",
+                        "text": "Work in healthcare finance and billing operations.",
+                        "weight": 1.37,
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(
+            request.query_plan["weighted_soft_preferences"][0]["weight"],
+            1.37,
+        )
+
+    def test_rejects_weight_outside_range_or_below_minimum_magnitude(self) -> None:
+        for weight in (-2.01, -0.09, 0.09, 2.01):
+            with self.subTest(weight=weight):
+                with self.assertRaises(CandidateSearchError) as ctx:
+                    validate_search_request(
+                        {
+                            "hard_constraints": [],
+                            "weighted_soft_preferences": [
+                                {
+                                    "dimension": "domain_search_text",
+                                    "text": "Work in healthcare finance operations.",
+                                    "weight": weight,
+                                }
+                            ],
+                        }
+                    )
+                self.assertEqual(ctx.exception.code, "INVALID_WEIGHT")
 
     def test_rejects_noncanonical_role_and_industry_values(self) -> None:
         invalid_constraints = [
