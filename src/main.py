@@ -35,6 +35,7 @@ from .preprocess import preprocess_profiles
 from .retrieval import (
     build_index,
     get_index_status,
+    parse_strict_json_object,
     search_candidates,
 )
 from .constants import (
@@ -42,7 +43,13 @@ from .constants import (
     MCP_GUIDE_FILE,
     QUERY_GUIDE_FILE,
 )
-from .schemas import CandidateSearchError, ProcessConfigError, load_config, search_tool_schema
+from .schemas import (
+    CandidateSearchError,
+    ProcessConfigError,
+    load_config,
+    search_tool_schema,
+    validate_search_arguments,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -72,6 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_config(preprocess_parser)
     add_range(preprocess_parser)
     preprocess_parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
+    preprocess_parser.add_argument("--discard-cache", action="store_true")
     preprocess_parser.add_argument("--json", action="store_true")
     preprocess_parser.set_defaults(func=cmd_preprocess)
 
@@ -79,6 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_config(build_parser_)
     add_range(build_parser_)
     build_parser_.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
+    build_parser_.add_argument("--discard-cache", action="store_true")
     build_parser_.add_argument("--json", action="store_true")
     build_parser_.set_defaults(func=cmd_build_index)
 
@@ -274,6 +283,7 @@ def cmd_preprocess(args: argparse.Namespace) -> int:
         start=args.start,
         end=args.end,
         concurrency=args.concurrency,
+        discard_cache=args.discard_cache,
     )
     print_output(result, as_json=args.json)
     return 0
@@ -286,6 +296,7 @@ def cmd_build_index(args: argparse.Namespace) -> int:
         start=args.start,
         end=args.end,
         concurrency=args.concurrency,
+        discard_cache=args.discard_cache,
     )
     print_output(result, as_json=args.json)
     return 0
@@ -293,16 +304,27 @@ def cmd_build_index(args: argparse.Namespace) -> int:
 
 def cmd_search(args: argparse.Namespace) -> int:
     config = load_config(args.config)
-    payload = json.loads(Path(args.query).read_text(encoding="utf-8"))
+    try:
+        payload = parse_strict_json_object(Path(args.query).read_text(encoding="utf-8"))
+    except (UnicodeError, ValueError) as exc:
+        raise CandidateSearchError(
+            "INVALID_JSON",
+            "query file must contain one standards-compliant JSON object",
+            reason=str(exc),
+        ) from exc
     if "query_plan" in payload:
-        query_plan = payload["query_plan"]
-        options = payload.get("options", {})
+        arguments = dict(payload)
+        if args.top_k is not None:
+            file_options = arguments.get("options", {})
+            if not isinstance(file_options, dict):
+                raise CandidateSearchError("INVALID_OPTIONS", "options must be an object")
+            arguments["options"] = {**file_options, "top_k": args.top_k}
+        request = validate_search_arguments(arguments)
+        query_plan = request.query_plan
+        options = request.options
     else:
         query_plan = payload
-        options = {}
-    if args.top_k is not None:
-        options = dict(options)
-        options["top_k"] = args.top_k
+        options = {} if args.top_k is None else {"top_k": args.top_k}
     result = search_candidates(config, query_plan, options)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
@@ -573,11 +595,22 @@ class MinimalMcpServer:
     def __init__(self, config: Any) -> None:
         self.config = config
 
-    def serve(self) -> None:
-        stdin = sys.stdin.buffer
-        stdout = sys.stdout.buffer
+    def serve(self, stdin: Any | None = None, stdout: Any | None = None) -> None:
+        stdin = stdin or sys.stdin.buffer
+        stdout = stdout or sys.stdout.buffer
         while True:
-            message = read_mcp_message(stdin)
+            try:
+                message = read_mcp_message(stdin)
+            except (KeyError, UnicodeError, ValueError):
+                write_mcp_message(
+                    stdout,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {"code": -32700, "message": "Parse error"},
+                    },
+                )
+                continue
             if message is None:
                 break
             response = self.handle(message)
@@ -633,21 +666,25 @@ class MinimalMcpServer:
         if params.get("name") != "search_candidates":
             raise ValueError(f"Unsupported tool: {params.get('name')}")
         arguments = params.get("arguments") or {}
+        is_error = False
         try:
+            request = validate_search_arguments(arguments)
             result = search_candidates(
                 self.config,
-                arguments.get("query_plan"),
-                arguments.get("options"),
+                request.query_plan,
+                request.options,
             )
         except CandidateSearchError as exc:
             result = exc.to_dict()
+            is_error = True
         return {
             "content": [
                 {
                     "type": "text",
                     "text": json.dumps(result, ensure_ascii=False, indent=2),
                 }
-            ]
+            ],
+            "isError": is_error,
         }
 
     def read_resource(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -678,26 +715,24 @@ def help_text() -> str:
 
 
 def read_mcp_message(stream: Any) -> dict[str, Any] | None:
-    headers = {}
-    while True:
-        line = stream.readline()
-        if line == b"":
-            return None
-        line = line.decode("ascii").strip()
-        if not line:
-            break
-        key, value = line.split(":", 1)
-        headers[key.lower()] = value.strip()
-    length = int(headers["content-length"])
-    body = stream.read(length)
-    return json.loads(body.decode("utf-8"))
+    line = stream.readline()
+    if line == b"":
+        return None
+    body = line.decode("utf-8").rstrip("\r\n")
+    if not body:
+        raise ValueError("MCP stdio message must not be empty")
+    return parse_strict_json_object(body)
 
 
 def write_mcp_message(stream: Any, message: dict[str, Any]) -> None:
-    body = json.dumps(message, ensure_ascii=False).encode("utf-8")
-    header = f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
-    stream.write(header)
+    body = json.dumps(
+        message,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
     stream.write(body)
+    stream.write(b"\n")
     stream.flush()
 
 

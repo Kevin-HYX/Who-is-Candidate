@@ -2,10 +2,19 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from src.main import build_parser
 from src.schemas import ProcessConfigError, load_config
 
 
 class ConfigTests(unittest.TestCase):
+    def test_build_commands_expose_discard_cache_flag(self) -> None:
+        parser = build_parser()
+        preprocess_args = parser.parse_args(["preprocess", "--discard-cache"])
+        index_args = parser.parse_args(["build-index", "--discard-cache"])
+
+        self.assertTrue(preprocess_args.discard_cache)
+        self.assertTrue(index_args.discard_cache)
+
     def test_missing_config_file_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             missing = Path(tmp) / "candidate-search.toml"

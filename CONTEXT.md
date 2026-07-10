@@ -37,7 +37,7 @@ The retrieval strategy that embeds query soft-preference texts at search time, l
 _Avoid_: vector database, ANN service, external retrieval service
 
 **Versioned Build Cache**:
-The file-based build cache produced by Preprocess and Build Index, valid only for the preprocess schema version and embedding index version that created it.
+The file-based build cache produced by Preprocess and Build Index, valid only when its schema/index versions, prompt or search-text input hashes, model/provider hashes, and source profile hashes still match the active build inputs.
 _Avoid_: timeless cache, fallback cache
 
 **Raw Profile Hash**:
@@ -97,8 +97,8 @@ The only allowed non-classification values for Official Classification fields: `
 _Avoid_: child category, translated label, typo, free-text fallback
 
 **Index Status**:
-The read-only MCP resource that reports current raw data, preprocessed profile, embedding, and index coverage so the Agent can understand whether search is ready, partial, or missing.
-_Avoid_: data completeness tool, build trigger
+The read-only, artifact-derived view that reports current raw data, preprocessed profile, embedding, and index coverage so the Agent can understand whether search is ready, partial, or missing. It is calculated at read time from persisted facts, current versions, and hashes rather than loaded from a dynamic status record.
+_Avoid_: data completeness tool, build trigger, persisted status cache
 
 **Top K**:
 The requested result count that the system makes a best effort to stay within. It is not a hard cap because candidates sharing the boundary rank must be returned together.
@@ -125,15 +125,15 @@ The QueryPlan generation result produced from User Prompts using a configured Qu
 _Avoid_: raw user request, retrieval result, explanation
 
 **Prompt Mapping Status**:
-The readiness state of a User Prompt Set after mapping. Mapping may partially succeed and still expose successful QueryPlans and precise errors, but only an all-success mapping is ready for Retrieval Trial.
-_Avoid_: retrieval status, hidden failed prompts, all-or-nothing output
+The artifact-derived readiness view of a User Prompt Set. Mapping may partially succeed and still expose successful QueryPlans and precise errors, but only a current, all-success mapping is ready for Retrieval Trial. Counts and stale-schema detection are calculated from Prompt Mapping artifacts, errors, versions, and hashes whenever the object is read.
+_Avoid_: retrieval status, hidden failed prompts, all-or-nothing output, persisted mapping status
 
 **Generation Cache**:
 The reusable successful output of an LLM-generating stage when its prerequisites have not changed. By default the system skips already successful items, while the controlling Agent can explicitly discard cached outputs and force regeneration.
 _Avoid_: silent fallback, immutable output, hidden retry state
 
 **Retrieval Trial**:
-The retrieval execution for a valid Prompt Mapping against a ready Test Sample. It refuses to run when the Test Sample or User Prompt Set is invalid, because those errors belong to their own debugging stages.
+The immutable, atomically published retrieval execution for a valid Prompt Mapping against a ready Test Sample. It freezes both inputs, runs from those snapshots, and stores the exact QueryPlan, effective options, query vectors, SearchResult, and input hashes needed for audit or replay. It refuses to run when the Test Sample or User Prompt Set is invalid, because those errors belong to their own debugging stages.
 _Avoid_: preprocessing output, prompt snapshot, natural-language need
 
 **Evaluation Loop**:
@@ -159,6 +159,14 @@ _Avoid_: production processed cache, single test environment, hidden temp direct
 **Build Workspace**:
 The explicit file workspace used by build and retrieval code, consisting of a raw profile JSONL path and an artifact directory. Production uses the default workspace from local config; Test Samples use their own sample directory under the Evaluation Data Root instead of pretending to be a Runtime Config.
 _Avoid_: fake runtime config, implicit output directory, shared test/prod cache
+
+**Artifact-Derived Status View**:
+A read-only projection calculated from persisted input and output artifacts, current schema/model/retrieval versions, and hashes. Readiness, `missing` / `partial` / `full`, coverage, counts, source ranges, and next actions are views, not separately persisted facts. CLI, MCP, Browse, Search readiness, and Retrieval Trial prerequisites must use the same calculation implementation.
+_Avoid_: dynamic status file, synchronized counters, adapter-specific readiness logic
+
+**Evaluation Identity Metadata**:
+The immutable identity and provenance facts stored in `sample.json`, `prompt_set.json`, or `trial.json`, such as object ID, seed or referenced object IDs, creation time, input snapshot hashes, and applicable versions. These files do not store readiness, coverage, mutable counts, or other derived status.
+_Avoid_: status cache, mutable statistics record, duplicated artifact state
 
 **Prompt Artifact**:
 A reusable evaluation prompt Markdown file under `test/data/prompts`, managed directly by the controlling Agent. Only preprocess and query prompts belong here; MCP guide text is not part of this evaluation prompt artifact store. Prompt versions are expressed through file naming rather than through a separate prompt registry.

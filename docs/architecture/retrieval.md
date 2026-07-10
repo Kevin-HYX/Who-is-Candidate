@@ -16,10 +16,10 @@ Candidate Search Tool 是无状态、确定性的检索 module：调用方提交
 ```text
 QueryPlan + options
   -> request validation
-  -> status / cache readiness
+  -> shared live readiness projection(artifact + version + hash)
   -> Raw Profile、Preprocessed Profile、embedding 一致性校验
   -> 硬筛：fail 淘汰；证据不足保留并结构化标记
-  -> 查询侧文本实时 embedding
+  -> 查询侧文本实时 embedding，或使用 Retrieval Trial 保存的同模型查询向量
   -> 候选人侧向量内存暴力 cosine
   -> 幸存池内 percentile
   -> weight * percentile 求和
@@ -27,7 +27,9 @@ QueryPlan + options
   -> SearchResult
 ```
 
-In-Memory Brute-Force Retrieval 由 [ADR-0012](../adr/0012-use-in-memory-brute-force-retrieval.md) 固化。候选人侧向量由 Build Index 预先生成；查询侧软偏好文本在搜索时生成向量，检索本身不引入并发召回 adapter、向量数据库或 ANN fallback。
+In-Memory Brute-Force Retrieval 由 [ADR-0012](../adr/0012-use-in-memory-brute-force-retrieval.md) 固化。候选人侧向量由 Build Index 预先生成；普通搜索实时生成查询向量，Retrieval Trial 会保存并可重放同一查询向量。候选与查询向量必须是非空、同维且只包含有限数值；embedding provider/model identity 不匹配时索引视为 `missing`。
+
+Search readiness 不读取独立状态记录。它与 CLI `index-status`、MCP `candidate://index-status`、Evaluation Browse 和 Retrieval Trial prerequisites 共用 Live Status Projection：从 Raw、Preprocessed、Embedding、Error artifact、当前 schema/model/index 版本与 hash 计算 `missing` / `partial` / `full`、覆盖率、计数、`source_ranges` 和 `next_actions`。
 
 ## 第一轮：硬筛
 
@@ -49,7 +51,7 @@ In-Memory Brute-Force Retrieval 由 [ADR-0012](../adr/0012-use-in-memory-brute-f
 score_before_weight_i =
   count(other cosine < candidate cosine) / (survivor_count - 1)
 
-score_after_weight_i = weight_i * score_before_weight_i
+score_after_weight_i = round(weight_i * round(score_before_weight_i, 6), 6)
 final_score = sum(score_after_weight_i)
 ```
 
@@ -70,8 +72,8 @@ SearchResult 只暴露足以审计检索的 interface：
 契约错误与业务错误使用 [`CandidateSearchError`](../../src/schemas.py) 的结构化 `{error: {code, message, ...details}}`。错误发生时不返回部分 SearchResult：
 
 - QueryPlan 或 options 非法时，在 schema seam 直接拒绝；
-- status 缺失或索引未构建时，明确区分“预处理和索引都缺失”与“只有索引缺失”；
+- artifact 缺失、版本或模型 identity 不匹配、Raw/Search Text Hash 失效时，按实时计算的真实可用性报告 `missing` / `partial` / `full`；
 - cached `user_id` 找不到 Raw Profile、Raw Profile Hash 不一致、Search Text Hash 不一致时，搜索整体失败，不跳过候选人；见 [ADR-0011](../adr/0011-require-raw-profile-for-cached-candidates.md)；
-- embedding 维度缺失或向量形状错误时直接失败，不使用零向量、旧向量或其它维度作为 fallback。
+- embedding 维度缺失、向量形状错误或包含 `NaN` / `Infinity` 时直接失败，不使用零向量、旧向量或其它维度作为 fallback。
 
 所有错误码和附加字段以 [`src/schemas.py`](../../src/schemas.py) 与 [`src/retrieval.py`](../../src/retrieval.py) 为机器契约；MCP adapter 只负责把该结构序列化为 tool result，不改写语义。

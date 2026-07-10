@@ -53,8 +53,8 @@ class EvaluationBrowseCliTests(unittest.TestCase):
                 seed=2,
                 preprocess_prompt=prompt_path,
             )
-            _update_json(root / "test" / "data" / "samples" / "sample_a" / "sample.json", {"updated_at": "2026-01-01T00:00:00+00:00"})
-            _update_json(root / "test" / "data" / "samples" / "sample_b" / "sample.json", {"updated_at": "2026-01-02T00:00:00+00:00"})
+            _update_json(root / "test" / "data" / "samples" / "sample_a" / "sample.json", {"created_at": "2026-01-01T00:00:00+00:00"})
+            _update_json(root / "test" / "data" / "samples" / "sample_b" / "sample.json", {"created_at": "2026-01-02T00:00:00+00:00"})
 
             listed = _run_cli_json(
                 "test-sample-list",
@@ -193,12 +193,12 @@ class EvaluationBrowseCliTests(unittest.TestCase):
             config_path = _write_config(root)
             trial_dir = root / "test" / "data" / "retrieval_trials" / "trial_a"
             trial_dir.mkdir(parents=True)
-            (trial_dir / "status.json").write_text(
+            (trial_dir / "trial.json").write_text(
                 json.dumps(
                     {
                         "trial_id": "trial_a",
-                        "trial_status": "complete",
-                        "updated_at": "2026-01-01T00:00:00+00:00",
+                        "expected_search_count": 2,
+                        "created_at": "2026-01-01T00:00:00+00:00",
                     },
                     sort_keys=True,
                 ),

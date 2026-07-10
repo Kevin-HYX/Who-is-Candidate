@@ -5,7 +5,6 @@ import math
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, Protocol
@@ -22,7 +21,6 @@ from .constants import (
     PROCESSED_PROFILES_FILE,
     SEARCHABLE_DIMENSIONS,
     SENIORITY_RANK,
-    STATUS_FILE,
 )
 from .schemas import BuildWorkspace, CandidateSearchError, RuntimeConfig, validate_search_request
 
@@ -93,7 +91,11 @@ class OpenAICompatibleModelClient:
 
     def _client(self) -> Any:
         openai = _load_openai()
-        return openai.OpenAI(api_key=self.config.api_key, base_url=self.config.base_url)
+        return openai.OpenAI(
+            api_key=self.config.api_key,
+            base_url=self.config.base_url,
+            max_retries=0,
+        )
 
 
 def _load_openai() -> Any:
@@ -107,17 +109,38 @@ def _load_openai() -> Any:
 
 
 def _parse_json_content(content: str) -> dict[str, Any]:
-    stripped = content.strip()
-    if stripped.startswith("```"):
-        lines = stripped.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].startswith("```"):
-            lines = lines[:-1]
-        stripped = "\n".join(lines).strip()
-    parsed = json.loads(stripped)
+    return parse_strict_json_object(content)
+
+
+def parse_strict_json_object(content: str) -> dict[str, Any]:
+    parsed = json.loads(
+        content,
+        object_pairs_hook=_reject_duplicate_json_keys,
+        parse_constant=_reject_json_constant,
+        parse_float=_parse_finite_json_float,
+    )
     if not isinstance(parsed, dict):
         raise ValueError("LLM output must be a JSON object")
+    return parsed
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON object key: {key}")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(value: str) -> Any:
+    raise ValueError(f"non-standard JSON constant is not allowed: {value}")
+
+
+def _parse_finite_json_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError(f"JSON number must be finite: {value}")
     return parsed
 
 
@@ -140,15 +163,11 @@ def search_candidates(
     options: dict[str, Any] | None = None,
     model_client: ModelClient | None = None,
     workspace: BuildWorkspace | None = None,
+    query_vectors: list[list[float]] | None = None,
 ) -> dict[str, Any]:
     build_workspace = workspace or config.build_workspace()
     request = validate_search_request(query_plan, options)
-    status = read_status(build_workspace)
-    if status is None:
-        raise CandidateSearchError(
-            "PREPROCESS_AND_INDEX_NOT_BUILT",
-            "preprocessed profiles and search index are not built",
-        )
+    status = get_index_status(config, build_workspace)
     if status.get("preprocess_status") == "missing" and status.get("index_status") == "missing":
         raise CandidateSearchError(
             "PREPROCESS_AND_INDEX_NOT_BUILT",
@@ -163,17 +182,32 @@ def search_candidates(
     raw_dataset = load_raw_dataset(build_workspace.raw_profiles_path)
     preprocessed = load_preprocessed_map(build_workspace)
     embeddings = load_embedding_map(build_workspace)
-    indexed_records = _usable_embedding_records(embeddings)
+    expected_embedding_hash = embedding_model_hash(config)
+    indexed_records = _usable_embedding_records(
+        embeddings,
+        expected_model_hash=expected_embedding_hash,
+    )
     if not indexed_records:
         raise CandidateSearchError("SEARCH_INDEX_NOT_BUILT", "search index is not built")
 
-    _validate_cache_consistency(raw_dataset, preprocessed, indexed_records)
+    _validate_cache_consistency(
+        raw_dataset,
+        preprocessed,
+        indexed_records,
+        expected_preprocess_model_hash=preprocess_model_hash(config),
+        expected_preprocess_prompt_hash=_workspace_preprocess_prompt_hash(build_workspace),
+        expected_embedding_model_hash=expected_embedding_hash,
+    )
 
-    client = model_client or OpenAICompatibleModelClient(config)
     preferences = request.query_plan["weighted_soft_preferences"]
-    query_vectors = client.embed_texts([item["text"] for item in preferences])
-    if len(query_vectors) != len(preferences):
-        raise RuntimeError("embedding model returned unexpected query vector count")
+    if query_vectors is None:
+        client = model_client or OpenAICompatibleModelClient(config)
+        query_vectors = client.embed_texts([item["text"] for item in preferences])
+    _validate_embedding_vectors(
+        query_vectors,
+        expected_count=len(preferences),
+        context="query embedding",
+    )
 
     candidates = []
     for user_id, embedding_record in indexed_records.items():
@@ -230,57 +264,81 @@ def search_candidates(
 
 def get_index_status(config: RuntimeConfig, workspace: BuildWorkspace | None = None) -> dict[str, Any]:
     build_workspace = workspace or config.build_workspace()
-    status = read_status(build_workspace)
-    if status is None:
-        return {
-            "preprocess_status": "missing",
-            "index_status": "missing",
-            "total_raw_candidates": None,
-            "preprocessed_candidates": 0,
-            "indexed_candidates": 0,
-            "source_ranges": [],
-            "next_actions": ["preprocess", "build-index"],
-        }
-    return status
-
-
-def read_status(workspace: BuildWorkspace | RuntimeConfig) -> dict[str, Any] | None:
-    build_workspace = _as_workspace(workspace)
-    path = build_workspace.processed_dir / STATUS_FILE
-    if not path.exists():
-        return None
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def write_status(workspace: BuildWorkspace | RuntimeConfig) -> dict[str, Any]:
-    build_workspace = _as_workspace(workspace)
-    build_workspace.processed_dir.mkdir(parents=True, exist_ok=True)
-    raw_count = _count_jsonl(build_workspace.raw_profiles_path)
+    raw_dataset = load_raw_dataset(build_workspace.raw_profiles_path)
     preprocessed = load_preprocessed_map(build_workspace, require_file=False)
     embeddings = load_embedding_map(build_workspace, require_file=False)
-    preprocessed_rows = [
-        record.get("source_row_index")
-        for record in preprocessed.values()
-        if record.get("preprocess_schema_version") == PREPROCESS_SCHEMA_VERSION
-    ]
-    indexed_rows = [
-        record.get("source_row_index")
-        for record in embeddings.values()
-        if record.get("embedding_index_version") == EMBEDDING_INDEX_VERSION
-    ]
+    expected_prompt_hash = _workspace_preprocess_prompt_hash(build_workspace)
+    expected_preprocess_hash = preprocess_model_hash(config)
+    expected_embedding_hash = embedding_model_hash(config)
+
+    usable_preprocessed = {}
+    for user_id, raw_profile in raw_dataset.by_user_id.items():
+        record = preprocessed.get(user_id)
+        if not record:
+            continue
+        if record.get("preprocess_schema_version") != PREPROCESS_SCHEMA_VERSION:
+            continue
+        if record.get("preprocess_model_hash") != expected_preprocess_hash:
+            continue
+        if (
+            expected_prompt_hash is not None
+            and record.get("preprocess_prompt_hash") != expected_prompt_hash
+        ):
+            continue
+        if record.get("raw_profile_hash") != canonical_hash(raw_profile):
+            continue
+        usable_preprocessed[user_id] = record
+
+    usable_embeddings = {}
+    for user_id, record in embeddings.items():
+        preprocessed_record = usable_preprocessed.get(user_id)
+        if preprocessed_record is None:
+            continue
+        if record.get("embedding_index_version") != EMBEDDING_INDEX_VERSION:
+            continue
+        if record.get("embedding_model_hash") != expected_embedding_hash:
+            continue
+        if record.get("search_text_hash") != search_text_hash(
+            preprocessed_record["preprocessed_profile"]
+        ):
+            continue
+        vectors = record.get("vectors")
+        if not isinstance(vectors, dict):
+            continue
+        try:
+            _validate_embedding_vectors(
+                [vectors.get(dimension) for dimension in sorted(SEARCHABLE_DIMENSIONS)],
+                expected_count=len(SEARCHABLE_DIMENSIONS),
+                context="cached candidate embedding",
+            )
+        except ValueError:
+            continue
+        usable_embeddings[user_id] = record
+
+    total = len(raw_dataset.rows)
     status = {
         "preprocess_schema_version": PREPROCESS_SCHEMA_VERSION,
         "embedding_index_version": EMBEDDING_INDEX_VERSION,
-        "total_raw_candidates": raw_count,
-        "preprocessed_candidates": len(preprocessed_rows),
-        "indexed_candidates": len(indexed_rows),
-        "preprocess_status": _coverage_status(len(preprocessed_rows), raw_count),
-        "index_status": _coverage_status(len(indexed_rows), raw_count),
-        "source_ranges": merge_source_ranges(indexed_rows),
-        "updated_at": datetime.now(UTC).isoformat(),
+        "total_raw_candidates": total,
+        "preprocessed_candidates": len(usable_preprocessed),
+        "indexed_candidates": len(usable_embeddings),
+        "preprocess_status": _coverage_status(len(usable_preprocessed), total),
+        "index_status": _coverage_status(len(usable_embeddings), total),
+        "source_ranges": merge_source_ranges(
+            [record.get("source_row_index") for record in usable_embeddings.values()]
+        ),
     }
-    _write_json(build_workspace.processed_dir / STATUS_FILE, status)
+    status["next_actions"] = _status_next_actions(status)
     return status
+
+
+def _status_next_actions(status: dict[str, Any]) -> list[str]:
+    actions = []
+    if status.get("preprocess_status") != "full":
+        actions.append("preprocess")
+    if status.get("index_status") != "full":
+        actions.append("build-index")
+    return actions
 
 
 def _coverage_status(count: int, total: int) -> str:
@@ -352,9 +410,7 @@ def read_jsonl(path: Path) -> list[tuple[int, dict[str, Any]]]:
         for index, line in enumerate(handle):
             if not line.strip():
                 continue
-            value = json.loads(line)
-            if not isinstance(value, dict):
-                raise ValueError(f"JSONL row {index} must be an object: {path}")
+            value = parse_strict_json_object(line)
             rows.append((index, value))
     return rows
 
@@ -364,7 +420,14 @@ def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
     temp = path.with_suffix(path.suffix + ".tmp")
     with temp.open("w", encoding="utf-8", newline="\n") as handle:
         for record in records:
-            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True))
+            handle.write(
+                json.dumps(
+                    record,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    allow_nan=False,
+                )
+            )
             handle.write("\n")
     os.replace(temp, path)
 
@@ -385,6 +448,31 @@ def merge_write_jsonl_by_user_id(path: Path, new_records: list[dict[str, Any]]) 
 def canonical_hash(value: Any) -> str:
     encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def preprocess_model_hash(config: RuntimeConfig) -> str:
+    return canonical_hash(
+        {
+            "base_url": config.base_url,
+            "model": config.preprocess_model,
+        }
+    )
+
+
+def embedding_model_hash(config: RuntimeConfig) -> str:
+    return canonical_hash(
+        {
+            "base_url": config.base_url,
+            "model": config.embedding_model,
+        }
+    )
+
+
+def _workspace_preprocess_prompt_hash(workspace: BuildWorkspace) -> str | None:
+    path = workspace.preprocess_prompt_path
+    if path is None or not path.is_file():
+        return None
+    return canonical_hash(path.read_text(encoding="utf-8"))
 
 
 def search_text_hash(preprocessed_profile: dict[str, Any]) -> str:
@@ -413,6 +501,10 @@ def _validate_cache_consistency(
     raw_dataset: RawDataset,
     preprocessed: dict[int, dict[str, Any]],
     embeddings: dict[int, dict[str, Any]],
+    *,
+    expected_preprocess_model_hash: str,
+    expected_preprocess_prompt_hash: str | None,
+    expected_embedding_model_hash: str,
 ) -> None:
     for user_id, embedding_record in embeddings.items():
         if user_id not in raw_dataset.by_user_id:
@@ -434,10 +526,32 @@ def _validate_cache_consistency(
                 "preprocessed profile version is not usable",
                 user_id=user_id,
             )
+        if profile_record.get("preprocess_model_hash") != expected_preprocess_model_hash:
+            raise CandidateSearchError(
+                "PREPROCESS_AND_INDEX_NOT_BUILT",
+                "preprocessed profile model identity is not usable",
+                user_id=user_id,
+            )
+        if (
+            expected_preprocess_prompt_hash is not None
+            and profile_record.get("preprocess_prompt_hash")
+            != expected_preprocess_prompt_hash
+        ):
+            raise CandidateSearchError(
+                "PREPROCESS_AND_INDEX_NOT_BUILT",
+                "preprocessed profile prompt identity is not usable",
+                user_id=user_id,
+            )
         if embedding_record.get("embedding_index_version") != EMBEDDING_INDEX_VERSION:
             raise CandidateSearchError(
                 "SEARCH_INDEX_NOT_BUILT",
                 "embedding index version is not usable",
+                user_id=user_id,
+            )
+        if embedding_record.get("embedding_model_hash") != expected_embedding_model_hash:
+            raise CandidateSearchError(
+                "SEARCH_INDEX_NOT_BUILT",
+                "embedding model identity is not usable",
                 user_id=user_id,
             )
         current_raw_hash = canonical_hash(raw_dataset.by_user_id[user_id])
@@ -457,12 +571,15 @@ def _validate_cache_consistency(
 
 
 def _usable_embedding_records(
-    embeddings: dict[int, dict[str, Any]]
+    embeddings: dict[int, dict[str, Any]],
+    *,
+    expected_model_hash: str,
 ) -> dict[int, dict[str, Any]]:
     return {
         user_id: record
         for user_id, record in embeddings.items()
         if record.get("embedding_index_version") == EMBEDDING_INDEX_VERSION
+        and record.get("embedding_model_hash") == expected_model_hash
     }
 
 
@@ -495,11 +612,8 @@ def _extract_hard_value(preprocessed_profile: dict[str, Any], field: str) -> dic
     confidence = item.get("confidence")
     value: Any
     if field == "role_family":
-        values = item.get("all") or []
-        primary = item.get("primary")
-        if primary and primary not in values:
-            values.append(primary)
-        value = values
+        role_value = item.get("value")
+        value = [role_value] if isinstance(role_value, str) else []
     elif field == "industries":
         values = item.get("all") or item.get("value") or []
         primary = item.get("primary")
@@ -603,24 +717,26 @@ def _score_candidates(
     scored = []
     for candidate_index, candidate in enumerate(candidates):
         soft_scores = []
-        final_score = 0.0
         for pref_index, preference in enumerate(preferences):
-            before = percentiles_by_pref[pref_index][candidate_index]
-            after = before * preference["weight"]
-            final_score += after
+            before = round(percentiles_by_pref[pref_index][candidate_index], 6)
+            after = round(before * preference["weight"], 6)
             soft_scores.append(
                 {
                     "preference_index": pref_index,
                     "dimension": preference["dimension"],
                     "weight": preference["weight"],
-                    "score_before_weight": round(before, 6),
-                    "score_after_weight": round(after, 6),
+                    "score_before_weight": before,
+                    "score_after_weight": after,
                 }
             )
+        final_score = round(
+            sum(item["score_after_weight"] for item in soft_scores),
+            6,
+        )
         scored.append(
             {
                 "user_id": candidate["user_id"],
-                "final_score": round(final_score, 6),
+                "final_score": final_score,
                 "hard_filter_status": candidate["hard_filter_status"],
                 "soft_preference_scores": soft_scores,
             }
@@ -674,20 +790,6 @@ def _select_top_k(
     return selected, None
 
 
-def _count_jsonl(path: Path) -> int:
-    if not path.exists():
-        return 0
-    with path.open("r", encoding="utf-8") as handle:
-        return sum(1 for line in handle if line.strip())
-
-
-def _write_json(path: Path, value: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(path.suffix + ".tmp")
-    temp.write_text(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
-    os.replace(temp, path)
-
-
 def build_index(
     config: RuntimeConfig,
     *,
@@ -705,6 +807,16 @@ def build_index(
     upper = len(raw_dataset.rows) if end is None else end
     selected = []
     embeddings = load_embedding_map(build_workspace, require_file=False)
+    current_embedding_model_hash = embedding_model_hash(config)
+    if any(
+        record.get("embedding_index_version") != EMBEDDING_INDEX_VERSION
+        or record.get("embedding_model_hash") != current_embedding_model_hash
+        for record in embeddings.values()
+    ):
+        embeddings = {}
+        write_jsonl(build_workspace.processed_dir / EMBEDDINGS_FILE, [])
+    current_preprocess_model_hash = preprocess_model_hash(config)
+    current_preprocess_prompt_hash = _workspace_preprocess_prompt_hash(build_workspace)
     skipped_count = 0
     for source_row_index, raw_profile in raw_dataset.rows:
         if not (lower <= source_row_index < upper):
@@ -724,6 +836,22 @@ def build_index(
                 "preprocessed profile version is not usable",
                 user_id=user_id,
             )
+        if record.get("preprocess_model_hash") != current_preprocess_model_hash:
+            raise CandidateSearchError(
+                "PREPROCESS_AND_INDEX_NOT_BUILT",
+                "preprocessed profile model identity is not usable",
+                user_id=user_id,
+            )
+        if (
+            current_preprocess_prompt_hash is not None
+            and record.get("preprocess_prompt_hash")
+            != current_preprocess_prompt_hash
+        ):
+            raise CandidateSearchError(
+                "PREPROCESS_AND_INDEX_NOT_BUILT",
+                "preprocessed profile prompt identity is not usable",
+                user_id=user_id,
+            )
         if record.get("raw_profile_hash") != canonical_hash(raw_profile):
             raise CandidateSearchError(
                 "RAW_PROFILE_HASH_MISMATCH",
@@ -736,11 +864,28 @@ def build_index(
             not discard_cache
             and cached_embedding
             and cached_embedding.get("embedding_index_version") == EMBEDDING_INDEX_VERSION
+            and cached_embedding.get("embedding_model_hash")
+            == current_embedding_model_hash
             and cached_embedding.get("search_text_hash") == current_search_text_hash
         ):
             skipped_count += 1
             continue
         selected.append(record)
+
+    invalidated_user_ids = {int(record["user_id"]) for record in selected}
+    if invalidated_user_ids:
+        remaining_embeddings = [
+            record
+            for user_id, record in embeddings.items()
+            if user_id not in invalidated_user_ids
+        ]
+        remaining_embeddings.sort(
+            key=lambda item: (
+                item.get("source_row_index", 10**12),
+                int(item["user_id"]),
+            )
+        )
+        write_jsonl(build_workspace.processed_dir / EMBEDDINGS_FILE, remaining_embeddings)
 
     client = model_client or OpenAICompatibleModelClient(config)
 
@@ -749,12 +894,16 @@ def build_index(
         texts = profile["embedding_search_texts"]
         dimensions = sorted(SEARCHABLE_DIMENSIONS)
         vectors = client.embed_texts([texts[dimension] for dimension in dimensions])
-        if len(vectors) != len(dimensions):
-            raise RuntimeError("embedding model returned unexpected vector count")
+        _validate_embedding_vectors(
+            vectors,
+            expected_count=len(dimensions),
+            context="candidate embedding",
+        )
         return {
             "user_id": int(record["user_id"]),
             "source_row_index": record["source_row_index"],
             "embedding_index_version": EMBEDDING_INDEX_VERSION,
+            "embedding_model_hash": current_embedding_model_hash,
             "search_text_hash": search_text_hash(profile),
             "vectors": {
                 dimension: vector
@@ -770,7 +919,7 @@ def build_index(
     )
     merge_write_jsonl_by_user_id(build_workspace.processed_dir / EMBEDDINGS_FILE, successes)
     write_latest_errors(build_workspace.processed_dir / INDEX_ERRORS_FILE, errors)
-    status = write_status(build_workspace)
+    status = get_index_status(config, build_workspace)
     if errors:
         raise CandidateSearchError(
             "BUILD_INDEX_FAILED",
@@ -784,6 +933,30 @@ def build_index(
         "failed_count": 0,
         "status": status,
     }
+
+
+def _validate_embedding_vectors(
+    vectors: Any,
+    *,
+    expected_count: int,
+    context: str,
+) -> None:
+    if not isinstance(vectors, list) or len(vectors) != expected_count:
+        raise ValueError(f"{context} returned an unexpected vector count")
+    dimensions = set()
+    for vector in vectors:
+        if not isinstance(vector, list) or not vector:
+            raise ValueError(f"{context} must return non-empty numeric vectors")
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            for value in vector
+        ):
+            raise ValueError(f"{context} vectors must contain only finite numbers")
+        dimensions.add(len(vector))
+    if len(dimensions) != 1:
+        raise ValueError(f"{context} vectors must have one consistent dimension")
 
 
 def run_with_retries(

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import math
 import tomllib
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,8 +13,11 @@ from .constants import (
     DEFAULT_TOP_K,
     HARD_CONSTRAINT_FIELDS,
     HARD_CONSTRAINT_OPERATORS,
+    INDUSTRY_VALUES,
     MANAGEMENT_SCOPE_RANK,
     MAX_TOP_K,
+    PREPROCESS_PROMPT_FILE,
+    ROLE_FAMILY_VALUES,
     SEARCHABLE_DIMENSIONS,
     SENIORITY_RANK,
 )
@@ -35,10 +40,23 @@ class ProcessConfigError(Exception):
     pass
 
 
+def is_english_generated_text(value: str) -> bool:
+    has_latin_letter = False
+    for character in value:
+        if not character.isalpha():
+            continue
+        unicode_name = unicodedata.name(character, "")
+        if "LATIN" not in unicode_name:
+            return False
+        has_latin_letter = True
+    return has_latin_letter
+
+
 @dataclass(frozen=True)
 class BuildWorkspace:
     raw_profiles_path: Path
     processed_dir: Path
+    preprocess_prompt_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -55,6 +73,7 @@ class RuntimeConfig:
         return BuildWorkspace(
             raw_profiles_path=self.raw_profiles_path,
             processed_dir=self.processed_dir,
+            preprocess_prompt_path=PREPROCESS_PROMPT_FILE,
         )
 
 
@@ -66,16 +85,149 @@ class SearchRequest:
 
 
 def search_tool_schema() -> dict[str, Any]:
+    def enum_array(values: Any) -> dict[str, Any]:
+        return {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": True,
+            "items": {"type": "string", "enum": list(values)},
+        }
+
+    field_value_schemas = {
+        "years_of_experience": {"type": "number", "minimum": 0},
+        "highest_degree_level": {"type": "integer", "enum": [0, 1, 2, 3]},
+        "role_family": enum_array(ROLE_FAMILY_VALUES),
+        "seniority_level": {"type": "string", "enum": list(SENIORITY_RANK)},
+        "industries": enum_array(INDUSTRY_VALUES),
+        "is_currently_working": {"type": "boolean"},
+    }
+    hard_constraint_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["field", "op", "value", "rationale"],
+        "properties": {
+            "field": {"type": "string", "enum": sorted(HARD_CONSTRAINT_FIELDS)},
+            "op": {
+                "type": "string",
+                "enum": sorted(
+                    {
+                        operator
+                        for operators in HARD_CONSTRAINT_OPERATORS.values()
+                        for operator in operators
+                    }
+                ),
+            },
+            "value": {
+                "oneOf": [
+                    {"type": "number"},
+                    {"type": "string"},
+                    {"type": "boolean"},
+                    {
+                        "type": "array",
+                        "minItems": 1,
+                        "uniqueItems": True,
+                        "items": {"type": "string"},
+                    },
+                ]
+            },
+            "rationale": {"type": "string", "minLength": 1},
+        },
+        "allOf": [
+            *[
+                {
+                    "if": {
+                        "properties": {"field": {"const": field}},
+                        "required": ["field"],
+                    },
+                    "then": {
+                        "properties": {
+                            "op": {
+                                "type": "string",
+                                "enum": sorted(HARD_CONSTRAINT_OPERATORS[field]),
+                            },
+                            "value": field_value_schemas[field],
+                        }
+                    },
+                }
+                for field in sorted(HARD_CONSTRAINT_FIELDS - {"management_scope"})
+            ],
+            {
+                "if": {
+                    "properties": {
+                        "field": {"const": "management_scope"},
+                        "op": {"enum": ["in", "not_in"]},
+                    },
+                    "required": ["field", "op"],
+                },
+                "then": {
+                    "properties": {
+                        "op": {"type": "string", "enum": ["in", "not_in"]},
+                        "value": enum_array(MANAGEMENT_SCOPE_RANK),
+                    }
+                },
+            },
+            {
+                "if": {
+                    "properties": {
+                        "field": {"const": "management_scope"},
+                        "op": {"enum": ["<=", "=", ">="]},
+                    },
+                    "required": ["field", "op"],
+                },
+                "then": {
+                    "properties": {
+                        "op": {"type": "string", "enum": ["<=", "=", ">="]},
+                        "value": {
+                            "type": "string",
+                            "enum": list(MANAGEMENT_SCOPE_RANK),
+                        },
+                    }
+                },
+            },
+        ],
+    }
+    soft_preference_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["dimension", "text", "weight"],
+        "properties": {
+            "dimension": {"type": "string", "enum": sorted(SEARCHABLE_DIMENSIONS)},
+            "text": {"type": "string", "minLength": 4},
+            "weight": {
+                "type": "number",
+                "minimum": -3.0,
+                "maximum": 3.0,
+                "not": {"const": 0},
+            },
+        },
+    }
     return {
         "name": "search_candidates",
         "description": "Search candidates with a complete QueryPlan.",
         "inputSchema": {
             "type": "object",
+            "additionalProperties": False,
             "required": ["query_plan"],
             "properties": {
-                "query_plan": {"type": "object"},
+                "query_plan": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["hard_constraints", "weighted_soft_preferences"],
+                    "properties": {
+                        "hard_constraints": {
+                            "type": "array",
+                            "items": hard_constraint_schema,
+                        },
+                        "weighted_soft_preferences": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": soft_preference_schema,
+                        },
+                    },
+                },
                 "options": {
                     "type": "object",
+                    "additionalProperties": False,
                     "properties": {"top_k": {"type": "integer", "minimum": 1, "maximum": 75}},
                 },
             },
@@ -127,6 +279,53 @@ def _resolve_path(base: Path, value: str) -> Path:
     return (base / candidate).resolve()
 
 
+def validate_generated_search_arguments(output: Any) -> SearchRequest:
+    if not isinstance(output, dict):
+        raise CandidateSearchError(
+            "INVALID_QUERY_SCHEMA_OUTPUT",
+            "query generation output must be an object",
+        )
+    expected_keys = {"query_plan", "options"}
+    actual_keys = set(output)
+    if actual_keys != expected_keys:
+        raise CandidateSearchError(
+            "INVALID_QUERY_SCHEMA_OUTPUT",
+            "query generation output must contain exactly query_plan and options",
+            missing_fields=sorted(expected_keys - actual_keys),
+            unsupported_fields=sorted(actual_keys - expected_keys),
+        )
+    options = output["options"]
+    if not isinstance(options, dict) or set(options) != {"top_k"}:
+        actual_option_keys = sorted(options) if isinstance(options, dict) else []
+        raise CandidateSearchError(
+            "INVALID_QUERY_SCHEMA_OUTPUT",
+            "query generation options must contain exactly top_k",
+            option_fields=actual_option_keys,
+        )
+    return validate_search_request(output["query_plan"], options)
+
+
+def validate_search_arguments(arguments: Any) -> SearchRequest:
+    if not isinstance(arguments, dict):
+        raise CandidateSearchError(
+            "INVALID_SEARCH_ARGUMENTS",
+            "search_candidates arguments must be an object",
+        )
+    allowed_keys = {"query_plan", "options"}
+    actual_keys = set(arguments)
+    if "query_plan" not in arguments or actual_keys - allowed_keys:
+        raise CandidateSearchError(
+            "INVALID_SEARCH_ARGUMENTS",
+            "search_candidates arguments must contain query_plan and may contain options",
+            missing_fields=[] if "query_plan" in arguments else ["query_plan"],
+            unsupported_fields=sorted(actual_keys - allowed_keys),
+        )
+    return validate_search_request(
+        arguments["query_plan"],
+        arguments.get("options"),
+    )
+
+
 def validate_search_request(
     query_plan: dict[str, Any],
     options: dict[str, Any] | None = None,
@@ -134,17 +333,17 @@ def validate_search_request(
     if not isinstance(query_plan, dict):
         raise CandidateSearchError("INVALID_QUERY_PLAN", "query_plan must be an object")
 
-    unknown_keys = set(query_plan) - {"hard_constraints", "weighted_soft_preferences"}
-    if unknown_keys:
+    expected_plan_keys = {"hard_constraints", "weighted_soft_preferences"}
+    actual_plan_keys = set(query_plan)
+    if actual_plan_keys != expected_plan_keys:
         raise CandidateSearchError(
             "INVALID_QUERY_PLAN_FIELD",
-            "query_plan contains unsupported fields",
-            fields=sorted(unknown_keys),
+            "query_plan must contain exactly hard_constraints and weighted_soft_preferences",
+            missing_fields=sorted(expected_plan_keys - actual_plan_keys),
+            unsupported_fields=sorted(actual_plan_keys - expected_plan_keys),
         )
 
-    hard_constraints = query_plan.get("hard_constraints", [])
-    if hard_constraints is None:
-        hard_constraints = []
+    hard_constraints = query_plan["hard_constraints"]
     if not isinstance(hard_constraints, list):
         raise CandidateSearchError(
             "INVALID_HARD_CONSTRAINT",
@@ -155,7 +354,7 @@ def validate_search_request(
     for index, item in enumerate(hard_constraints):
         normalized_hard.append(_validate_hard_constraint(index, item))
 
-    soft_preferences = query_plan.get("weighted_soft_preferences")
+    soft_preferences = query_plan["weighted_soft_preferences"]
     if not isinstance(soft_preferences, list) or not soft_preferences:
         raise CandidateSearchError(
             "EMPTY_SOFT_PREFERENCES",
@@ -165,13 +364,36 @@ def validate_search_request(
     normalized_soft = []
     for index, item in enumerate(soft_preferences):
         normalized_soft.append(_validate_soft_preference(index, item))
+    seen_soft_preferences: set[tuple[str, str]] = set()
+    for index, item in enumerate(normalized_soft):
+        identity = (item["dimension"], item["text"].casefold())
+        if identity in seen_soft_preferences:
+            raise CandidateSearchError(
+                "INVALID_SOFT_PREFERENCE",
+                f"weighted_soft_preferences[{index}] duplicates an earlier preference",
+                dimension=item["dimension"],
+                text=item["text"],
+            )
+        seen_soft_preferences.add(identity)
 
     normalized_plan = {
         "hard_constraints": normalized_hard,
         "weighted_soft_preferences": normalized_soft,
     }
 
-    normalized_options = dict(options or {})
+    if options is None:
+        normalized_options: dict[str, Any] = {}
+    elif not isinstance(options, dict):
+        raise CandidateSearchError("INVALID_OPTIONS", "options must be an object")
+    else:
+        unknown_option_keys = set(options) - {"top_k"}
+        if unknown_option_keys:
+            raise CandidateSearchError(
+                "INVALID_OPTIONS_FIELD",
+                "options contains unsupported fields",
+                fields=sorted(unknown_option_keys),
+            )
+        normalized_options = dict(options)
     top_k = _validate_top_k(normalized_options.get("top_k", DEFAULT_TOP_K))
     normalized_options["top_k"] = top_k
 
@@ -187,6 +409,16 @@ def _validate_hard_constraint(index: int, item: Any) -> dict[str, Any]:
         raise CandidateSearchError(
             "INVALID_HARD_CONSTRAINT",
             f"hard_constraints[{index}] must be an object",
+        )
+
+    expected_keys = {"field", "op", "value", "rationale"}
+    actual_keys = set(item)
+    if actual_keys != expected_keys:
+        raise CandidateSearchError(
+            "INVALID_HARD_CONSTRAINT",
+            f"hard_constraints[{index}] must contain exactly field, op, value, and rationale",
+            missing_fields=sorted(expected_keys - actual_keys),
+            unsupported_fields=sorted(actual_keys - expected_keys),
         )
 
     field = item.get("field")
@@ -216,40 +448,85 @@ def _validate_hard_constraint(index: int, item: Any) -> dict[str, Any]:
         )
     _validate_hard_constraint_value(index, field, op, item["value"])
 
+    rationale = item["rationale"]
+    if not isinstance(rationale, str) or not rationale.strip():
+        raise CandidateSearchError(
+            "INVALID_HARD_CONSTRAINT",
+            f"hard_constraints[{index}].rationale must be a non-empty string",
+        )
+    _require_english_query_text(
+        rationale,
+        f"hard_constraints[{index}].rationale",
+    )
+
     return {
         "field": field,
         "op": op,
         "value": item["value"],
-        "rationale": str(item.get("rationale", "")),
+        "rationale": rationale.strip(),
     }
 
 
 def _validate_hard_constraint_value(index: int, field: str, op: str, value: Any) -> None:
     if field == "years_of_experience":
         _require_number(index, field, value)
+        if value < 0:
+            _invalid_hard_value(index, field, value, "must be non-negative")
         return
     if field == "highest_degree_level":
-        if value not in {0, 1, 2, 3}:
-            _invalid_hard_value(index, field, value, "must be one of 0, 1, 2, 3")
+        if isinstance(value, bool) or not isinstance(value, int) or value not in {0, 1, 2, 3}:
+            _invalid_hard_value(
+                index,
+                field,
+                value,
+                "must be one of 0, 1, 2, 3",
+                allowed_values=[0, 1, 2, 3],
+            )
         return
     if field == "seniority_level":
         if isinstance(value, str) and value in SENIORITY_RANK:
             return
-        _invalid_hard_value(index, field, value, "must be a known seniority level")
+        _invalid_hard_value(
+            index,
+            field,
+            value,
+            "must be a known seniority level",
+            allowed_values=list(SENIORITY_RANK),
+        )
     if field == "management_scope":
         allowed = set(MANAGEMENT_SCOPE_RANK)
         if op in {"in", "not_in"}:
-            values = value if isinstance(value, list) else [value]
-            if values and all(isinstance(item, str) and item in allowed for item in values):
+            if _valid_enum_list(value, allowed):
                 return
         elif isinstance(value, str) and value in allowed:
             return
-        _invalid_hard_value(index, field, value, "must be a known management scope")
-    if field in {"role_family", "industries"}:
-        values = value if isinstance(value, list) else [value]
-        if values and all(isinstance(item, str) and item.strip() for item in values):
+        _invalid_hard_value(
+            index,
+            field,
+            value,
+            "must be a known management scope",
+            allowed_values=list(MANAGEMENT_SCOPE_RANK),
+        )
+    if field == "role_family":
+        if _valid_enum_list(value, set(ROLE_FAMILY_VALUES)):
             return
-        _invalid_hard_value(index, field, value, "must be a non-empty string or list of strings")
+        _invalid_hard_value(
+            index,
+            field,
+            value,
+            "must be a non-empty unique array of canonical role-family values",
+            allowed_values=list(ROLE_FAMILY_VALUES),
+        )
+    if field == "industries":
+        if _valid_enum_list(value, set(INDUSTRY_VALUES)):
+            return
+        _invalid_hard_value(
+            index,
+            field,
+            value,
+            "must be a non-empty unique array of LinkedIn Industry V2 top-level values",
+            allowed_values=list(INDUSTRY_VALUES),
+        )
     if field == "is_currently_working":
         if isinstance(value, bool):
             return
@@ -257,17 +534,39 @@ def _validate_hard_constraint_value(index: int, field: str, op: str, value: Any)
 
 
 def _require_number(index: int, field: str, value: Any) -> None:
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
+    if (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    ):
         return
     _invalid_hard_value(index, field, value, "must be numeric")
 
 
-def _invalid_hard_value(index: int, field: str, value: Any, reason: str) -> None:
+def _invalid_hard_value(
+    index: int,
+    field: str,
+    value: Any,
+    reason: str,
+    *,
+    allowed_values: list[Any] | None = None,
+) -> None:
+    details: dict[str, Any] = {"field": field, "value": value}
+    if allowed_values is not None:
+        details["allowed_values"] = allowed_values
     raise CandidateSearchError(
         "INVALID_HARD_CONSTRAINT_VALUE",
         f"hard_constraints[{index}].value is not valid for {field}: {reason}",
-        field=field,
-        value=value,
+        **details,
+    )
+
+
+def _valid_enum_list(value: Any, allowed: set[str]) -> bool:
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(isinstance(item, str) and item in allowed for item in value)
+        and len(value) == len(set(value))
     )
 
 
@@ -276,6 +575,16 @@ def _validate_soft_preference(index: int, item: Any) -> dict[str, Any]:
         raise CandidateSearchError(
             "INVALID_SOFT_PREFERENCE",
             f"weighted_soft_preferences[{index}] must be an object",
+        )
+
+    expected_keys = {"dimension", "text", "weight"}
+    actual_keys = set(item)
+    if actual_keys != expected_keys:
+        raise CandidateSearchError(
+            "INVALID_SOFT_PREFERENCE",
+            f"weighted_soft_preferences[{index}] must contain exactly dimension, text, and weight",
+            missing_fields=sorted(expected_keys - actual_keys),
+            unsupported_fields=sorted(actual_keys - expected_keys),
         )
 
     dimension = item.get("dimension")
@@ -293,9 +602,17 @@ def _validate_soft_preference(index: int, item: Any) -> dict[str, Any]:
             "INVALID_SOFT_PREFERENCE_TEXT",
             f"weighted_soft_preferences[{index}].text is not valid",
         )
+    _require_english_query_text(
+        text,
+        f"weighted_soft_preferences[{index}].text",
+    )
 
     weight = item.get("weight")
-    if not isinstance(weight, (int, float)) or isinstance(weight, bool):
+    if (
+        not isinstance(weight, (int, float))
+        or isinstance(weight, bool)
+        or not math.isfinite(weight)
+    ):
         raise CandidateSearchError(
             "INVALID_WEIGHT",
             f"weighted_soft_preferences[{index}].weight must be numeric",
@@ -315,26 +632,31 @@ def _valid_soft_text(text: str) -> bool:
     stripped = text.strip()
     if len(stripped) < 4:
         return False
-    negation_only = {
-        "不要",
-        "别",
-        "避免",
-        "排除",
-        "not",
-        "no",
-        "without",
-        "none",
-    }
-    return stripped.lower() not in negation_only
+    lowered = stripped.casefold()
+    forbidden_negation_prefixes = (
+        "avoid ",
+        "do not ",
+        "don't ",
+        "no ",
+        "not ",
+        "without ",
+    )
+    return not lowered.startswith(forbidden_negation_prefixes)
+
+
+def _require_english_query_text(value: str, path: str) -> None:
+    if not is_english_generated_text(value):
+        raise CandidateSearchError(
+            "NON_ENGLISH_GENERATED_TEXT",
+            f"{path} must be English text",
+            field=path,
+        )
 
 
 def _validate_top_k(value: Any) -> int:
-    if isinstance(value, bool):
+    if isinstance(value, bool) or not isinstance(value, int):
         raise CandidateSearchError("INVALID_TOP_K", "top_k must be an integer")
-    try:
-        top_k = int(value)
-    except (TypeError, ValueError) as exc:
-        raise CandidateSearchError("INVALID_TOP_K", "top_k must be an integer") from exc
+    top_k = value
     if top_k < 1:
         raise CandidateSearchError("INVALID_TOP_K", "top_k must be >= 1")
     if top_k > MAX_TOP_K:

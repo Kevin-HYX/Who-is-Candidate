@@ -4,8 +4,10 @@ Candidate Search 是一个本地运行的候选人检索工具。它把原始候
 
 系统刻意分开两类职责：
 
-- CLI 执行会改变本地状态的 `preprocess`、`build-index`，也提供搜索、状态查询和评测闭环命令。
+- CLI 通过 `preprocess`、`build-index` 写入本地事实 artifact，也提供搜索、状态查询和评测闭环命令。
 - MCP 只提供 `search_candidates` 查询工具，以及 `candidate://help`、`candidate://index-status` 两个只读资源；不会自动预处理或建索引。
+
+系统不持久化动态状态文件。Raw、Preprocessed、Embedding、Mapping、Result 和 Error artifact 连同版本与 hash 是事实来源；readiness、`missing` / `partial` / `full`、覆盖率、计数、`source_ranges` 和 `next_actions` 在读取时实时计算。CLI、MCP、Browse、Search readiness 与 Retrieval Trial 前置检查复用同一套状态计算，避免不同入口产生互相矛盾的判断。
 
 检索结果是结构化数据，不是最终招聘结论。候选人事实应以结果中的 `raw_profile` 为准；分数只用于解释排序。
 
@@ -39,7 +41,7 @@ python -m src.main index-status
     "weighted_soft_preferences": [
       {
         "dimension": "skills_search_text",
-        "text": "使用 Python 建设数据处理与检索系统",
+        "text": "Use Python to build data-processing and retrieval systems.",
         "weight": 1.0
       }
     ]
@@ -66,7 +68,7 @@ python -m src.main search --query query.json
 python -m src.main serve-mcp
 ```
 
-MCP 客户端应先读取 `candidate://index-status`，再按 `candidate://help` 构造并调用 `search_candidates`。配置路径只在启动进程时通过 `--config` 指定，不属于 MCP tool/resource 参数。
+MCP 客户端应先读取 `candidate://index-status`，再按 `candidate://help` 构造并调用 `search_candidates`。`candidate://index-status` 是从当前 artifact、版本和 hash 实时计算的只读视图；配置路径只在启动进程时通过 `--config` 指定，不属于 MCP tool/resource 参数。
 
 ## 文档地图
 

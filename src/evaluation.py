@@ -1,24 +1,32 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import shutil
+import tempfile
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
 from .constants import (
     DEFAULT_CONCURRENCY,
+    EMBEDDING_INDEX_VERSION,
     EMBEDDINGS_FILE,
     INDEX_ERRORS_FILE,
     PREPROCESS_ERRORS_FILE,
+    PREPROCESS_SCHEMA_VERSION,
     PROCESSED_PROFILES_FILE,
+    QUERY_SCHEMA_VERSION,
+    RETRIEVAL_VERSION,
 )
 from .preprocess import preprocess_profiles
 from .retrieval import (
     OpenAICompatibleModelClient,
     build_index,
     canonical_hash,
+    get_index_status,
     load_raw_dataset,
     search_candidates,
 )
@@ -26,7 +34,7 @@ from .schemas import (
     BuildWorkspace,
     CandidateSearchError,
     search_tool_schema,
-    validate_search_request,
+    validate_generated_search_arguments,
 )
 
 BROWSE_DEFAULT_LIMIT = 20
@@ -52,13 +60,14 @@ def create_test_sample(
     sample_dir.mkdir(parents=True)
     (sample_dir / "prompt_snapshot").mkdir()
     shutil.copyfile(prompt_path, sample_dir / "prompt_snapshot" / "preprosess.md")
-    return _write_test_sample_cohort(
+    _write_test_sample_cohort(
         config,
         sample_dir,
         sample_id=sample_id,
         sample_size=sample_size,
         seed=seed,
     )
+    return read_test_sample(config, sample_id)
 
 
 def resample_test_sample(
@@ -82,13 +91,14 @@ def resample_test_sample(
             sample_id=sample_id,
         )
     _discard_test_sample_build_artifacts(sample_dir)
-    return _write_test_sample_cohort(
+    _write_test_sample_cohort(
         config,
         sample_dir,
         sample_id=sample_id,
         sample_size=sample_size,
         seed=seed,
     )
+    return read_test_sample(config, sample_id)
 
 
 def read_test_sample(config: Any, sample_id: str) -> dict[str, Any]:
@@ -101,10 +111,8 @@ def read_test_sample(config: Any, sample_id: str) -> dict[str, Any]:
             sample_id=sample_id,
         )
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    status = _read_json_file_if_exists(sample_dir / "status.json")
-    if status is not None:
-        metadata["status"] = status
-        metadata["updated_at"] = status.get("updated_at", metadata.get("updated_at"))
+    status = get_index_status(config, _test_sample_workspace(sample_dir))
+    metadata["status"] = status
     return metadata
 
 
@@ -113,11 +121,11 @@ def list_test_samples(config: Any) -> dict[str, Any]:
     items = []
     for sample_dir in _object_dirs(root):
         metadata = _read_json_file_if_exists(sample_dir / "sample.json")
-        status = _read_json_file_if_exists(sample_dir / "status.json") or metadata.get("status", {})
+        status = get_index_status(config, _test_sample_workspace(sample_dir))
         item = {
             "id": metadata.get("sample_id", sample_dir.name),
             "status": status,
-            "updated_at": status.get("updated_at") or metadata.get("updated_at"),
+            "created_at": metadata.get("created_at"),
         }
         for key in ("sample_size", "seed", "total_raw_candidates"):
             if key in metadata:
@@ -277,38 +285,38 @@ def create_user_prompt_set(
     shutil.copyfile(query_prompt, set_dir / "prompt_snapshot" / "query.md")
     _write_json_file(set_dir / "tool_schema.json", search_tool_schema())
     _write_jsonl_file(set_dir / "user_prompts.jsonl", prompts)
-    return _write_user_prompt_set_status(
-        set_dir,
-        set_id=set_id,
-        total_prompts=len(prompts),
-        mapped_count=0,
-        failed_count=0,
-        mapping_status="missing",
-    )
+    metadata = {
+        "set_id": set_id,
+        "created_at": datetime.now(UTC).isoformat(),
+        "query_schema_version": QUERY_SCHEMA_VERSION,
+        "query_prompt_hash": canonical_hash(query_prompt.read_text(encoding="utf-8")),
+        "tool_schema_hash": canonical_hash(search_tool_schema()),
+    }
+    _write_json_file(set_dir / "prompt_set.json", metadata)
+    return read_user_prompt_set(config, set_id)
 
 
 def read_user_prompt_set(config: Any, set_id: str) -> dict[str, Any]:
     set_dir = _user_prompt_set_dir(config, set_id)
-    status_path = set_dir / "status.json"
-    if not status_path.exists():
+    if not (set_dir / "prompt_set.json").exists():
         raise CandidateSearchError(
             "USER_PROMPT_SET_NOT_FOUND",
             "user prompt set does not exist",
             set_id=set_id,
         )
-    return json.loads(status_path.read_text(encoding="utf-8"))
+    return _calculate_user_prompt_set_status(config, set_dir, set_id)
 
 
 def list_user_prompt_sets(config: Any) -> dict[str, Any]:
     root = _evaluation_data_dir(config) / "user_prompt_sets"
     items = []
     for set_dir in _object_dirs(root):
-        status = _read_json_file_if_exists(set_dir / "status.json")
+        status = read_user_prompt_set(config, set_dir.name)
         items.append(
             {
                 "id": status.get("set_id", set_dir.name),
                 "status": status,
-                "updated_at": status.get("updated_at"),
+                "created_at": status.get("created_at"),
             }
         )
     return _list_envelope("user_prompt_set", items)
@@ -376,6 +384,7 @@ def map_user_prompt_set(
     discard_cache: bool = False,
 ) -> dict[str, Any]:
     set_dir = _require_user_prompt_set_dir(config, set_id)
+    _require_current_user_prompt_set_schema(set_dir, set_id)
     user_prompts = _read_jsonl_file(set_dir / "user_prompts.jsonl")
     query_guide = (set_dir / "prompt_snapshot" / "query.md").read_text(encoding="utf-8")
     tool_schema = json.loads((set_dir / "tool_schema.json").read_text(encoding="utf-8"))
@@ -387,13 +396,45 @@ def map_user_prompt_set(
             "model": config.preprocess_model,
         }
     )
-    existing = {}
     generated_path = set_dir / "generated_query_plans.jsonl"
+    existing = {}
     if generated_path.exists() and not discard_cache:
         existing = {
             record["prompt_id"]: record
             for record in _read_jsonl_file(generated_path)
         }
+
+    valid_existing = {}
+    for prompt in user_prompts:
+        prompt_id = prompt["prompt_id"]
+        cached = existing.get(prompt_id)
+        if not cached or not _mapping_cache_matches(
+            cached,
+            user_prompt_hash=canonical_hash(prompt["text"]),
+            query_guide_hash=query_guide_hash,
+            tool_schema_hash=tool_schema_hash,
+            model_config_hash=model_config_hash,
+        ):
+            continue
+        try:
+            validate_generated_search_arguments(
+                {
+                    "query_plan": cached.get("query_plan"),
+                    "options": cached.get("options"),
+                }
+            )
+        except CandidateSearchError:
+            continue
+        valid_existing[prompt_id] = cached
+
+    existing = valid_existing
+    _write_jsonl_file(
+        generated_path,
+        [existing[prompt["prompt_id"]] for prompt in user_prompts if prompt["prompt_id"] in existing],
+    )
+    errors_path = set_dir / "mapping_errors.jsonl"
+    if errors_path.exists():
+        errors_path.unlink()
 
     client = model_client or OpenAICompatibleModelClient(config)
     generated = dict(existing)
@@ -413,17 +454,27 @@ def map_user_prompt_set(
             tool_schema_hash=tool_schema_hash,
             model_config_hash=model_config_hash,
         ):
-            skipped_count += 1
-            continue
-        try:
-            output = client.generate_query_plan(query_guide, tool_schema, prompt["text"])
-            if "query_plan" not in output:
-                raise CandidateSearchError(
-                    "INVALID_QUERY_SCHEMA_OUTPUT",
-                    "query generation output must contain query_plan",
-                    prompt_id=prompt_id,
+            try:
+                validate_generated_search_arguments(
+                    {
+                        "query_plan": cached.get("query_plan"),
+                        "options": cached.get("options"),
+                    }
                 )
-            request = validate_search_request(output["query_plan"], output.get("options", {}))
+            except CandidateSearchError:
+                cached = None
+            else:
+                skipped_count += 1
+                continue
+        try:
+            output = _call_model_with_transport_retries(
+                lambda: client.generate_query_plan(
+                    query_guide,
+                    tool_schema,
+                    prompt["text"],
+                )
+            )
+            request = validate_generated_search_arguments(output)
             generated[prompt_id] = {
                 "prompt_id": prompt_id,
                 "user_prompt": prompt["text"],
@@ -431,20 +482,31 @@ def map_user_prompt_set(
                 "query_guide_hash": query_guide_hash,
                 "tool_schema_hash": tool_schema_hash,
                 "model_config_hash": model_config_hash,
+                "query_schema_version": QUERY_SCHEMA_VERSION,
                 "query_plan": request.query_plan,
                 "options": request.options,
             }
             generated_count += 1
         except Exception as exc:  # noqa: BLE001 - persisted for Agent review.
             generated.pop(prompt_id, None)
-            errors.append(
-                {
-                    "prompt_id": prompt_id,
-                    "user_prompt_hash": user_prompt_hash,
-                    "error_type": type(exc).__name__,
-                    "message": str(exc),
-                }
-            )
+            error = {
+                "prompt_id": prompt_id,
+                "user_prompt_hash": user_prompt_hash,
+                "query_guide_hash": query_guide_hash,
+                "tool_schema_hash": tool_schema_hash,
+                "model_config_hash": model_config_hash,
+                "query_schema_version": QUERY_SCHEMA_VERSION,
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+            }
+            if isinstance(exc, CandidateSearchError):
+                error["code"] = exc.code
+                error["details"] = exc.details
+            elif _is_retryable_model_transport_error(exc):
+                error["code"] = "QUERY_MODEL_REQUEST_FAILED"
+            else:
+                error["code"] = "INVALID_QUERY_SCHEMA_OUTPUT"
+            errors.append(error)
 
     ordered_generated = [
         generated[prompt_id]
@@ -452,25 +514,13 @@ def map_user_prompt_set(
         if prompt_id in generated
     ]
     _write_jsonl_file(generated_path, ordered_generated)
-    errors_path = set_dir / "mapping_errors.jsonl"
     if errors:
         _write_jsonl_file(errors_path, errors)
-    elif errors_path.exists():
-        errors_path.unlink()
 
-    mapped_count = len(ordered_generated)
-    failed_count = len(errors)
-    mapping_status = "ready" if mapped_count == len(user_prompts) and failed_count == 0 else "partial"
-    return _write_user_prompt_set_status(
-        set_dir,
-        set_id=set_id,
-        total_prompts=len(user_prompts),
-        mapped_count=mapped_count,
-        failed_count=failed_count,
-        mapping_status=mapping_status,
-        generated_count=generated_count,
-        skipped_count=skipped_count,
-    )
+    result = _calculate_user_prompt_set_status(config, set_dir, set_id)
+    result["generated_count"] = generated_count
+    result["skipped_count"] = skipped_count
+    return result
 
 
 def run_retrieval_trial(
@@ -490,75 +540,203 @@ def run_retrieval_trial(
             "retrieval trial already exists",
             trial_id=trial_id,
         )
-    trial_dir.mkdir(parents=True)
-    generated = _read_jsonl_file(prompt_set_dir / "generated_query_plans.jsonl")
-    sample_workspace = _test_sample_workspace(sample_dir)
-    client = model_client or OpenAICompatibleModelClient(config)
-    search_results = []
-    errors = []
-    for mapping in generated:
-        prompt_id = mapping["prompt_id"]
-        options = dict(mapping.get("options", {}))
-        options["top_k"] = 10
-        try:
-            result = search_candidates(
-                config,
-                mapping["query_plan"],
-                options,
-                model_client=client,
-                workspace=sample_workspace,
-            )
-            search_results.append(
-                {
+    trial_dir.parent.mkdir(parents=True, exist_ok=True)
+    temporary_dir = Path(
+        tempfile.mkdtemp(prefix=f".{trial_id}-", dir=trial_dir.parent)
+    )
+    try:
+        (
+            sample_snapshot_hash,
+            prompt_set_snapshot_hash,
+            input_files,
+        ) = _snapshot_retrieval_trial_inputs(temporary_dir, sample_dir, prompt_set_dir)
+        sample_snapshot_dir = temporary_dir / "input_snapshot" / "test_sample"
+        prompt_set_snapshot_dir = temporary_dir / "input_snapshot" / "user_prompt_set"
+        generated = _read_jsonl_file(
+            prompt_set_snapshot_dir / "generated_query_plans.jsonl"
+        )
+        sample_workspace = _test_sample_workspace(sample_snapshot_dir)
+        client = model_client or OpenAICompatibleModelClient(config)
+        search_results = []
+        errors = []
+        for mapping in generated:
+            prompt_id = mapping["prompt_id"]
+            options = dict(mapping.get("options", {}))
+            options["top_k"] = 10
+            try:
+                preferences = mapping["query_plan"]["weighted_soft_preferences"]
+                query_vectors = _call_model_with_transport_retries(
+                    lambda: client.embed_texts(
+                        [preference["text"] for preference in preferences]
+                    )
+                )
+                result = search_candidates(
+                    config,
+                    mapping["query_plan"],
+                    options,
+                    model_client=client,
+                    workspace=sample_workspace,
+                    query_vectors=query_vectors,
+                )
+                search_results.append(
+                    {
+                        "prompt_id": prompt_id,
+                        "query_plan": mapping["query_plan"],
+                        "options": options,
+                        "query_vectors": query_vectors,
+                        "search_result": result,
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001 - persisted for Agent review.
+                error = {
                     "prompt_id": prompt_id,
-                    "search_result": result,
-                }
-            )
-        except Exception as exc:  # noqa: BLE001 - persisted for Agent review.
-            errors.append(
-                {
-                    "prompt_id": prompt_id,
+                    "query_plan": mapping["query_plan"],
+                    "options": options,
                     "error_type": type(exc).__name__,
                     "message": str(exc),
                 }
+                if isinstance(exc, CandidateSearchError):
+                    error["code"] = exc.code
+                    error["details"] = exc.details
+                elif _is_retryable_model_transport_error(exc):
+                    error["code"] = "QUERY_EMBEDDING_REQUEST_FAILED"
+                errors.append(error)
+        _write_jsonl_file(temporary_dir / "search_results.jsonl", search_results)
+        if errors:
+            _write_jsonl_file(temporary_dir / "retrieval_errors.jsonl", errors)
+        metadata = {
+            "trial_id": trial_id,
+            "sample_id": sample_id,
+            "user_prompt_set_id": user_prompt_set_id,
+            "created_at": datetime.now(UTC).isoformat(),
+            "expected_search_count": len(generated),
+            "test_sample_snapshot_hash": sample_snapshot_hash,
+            "user_prompt_set_snapshot_hash": prompt_set_snapshot_hash,
+            "input_files": input_files,
+            "model_config_hash": canonical_hash(
+                {
+                    "base_url": config.base_url,
+                    "preprocess_model": config.preprocess_model,
+                    "embedding_model": config.embedding_model,
+                }
+            ),
+            "preprocess_schema_version": PREPROCESS_SCHEMA_VERSION,
+            "embedding_index_version": EMBEDDING_INDEX_VERSION,
+            "query_schema_version": QUERY_SCHEMA_VERSION,
+            "retrieval_version": RETRIEVAL_VERSION,
+        }
+        _write_json_file(temporary_dir / "trial.json", metadata)
+        os.replace(temporary_dir, trial_dir)
+        return read_retrieval_trial(config, trial_id)
+    except Exception:
+        if temporary_dir.exists():
+            shutil.rmtree(temporary_dir)
+        raise
+
+
+def _snapshot_retrieval_trial_inputs(
+    trial_dir: Path,
+    sample_dir: Path,
+    prompt_set_dir: Path,
+) -> tuple[str, str, dict[str, dict[str, str]]]:
+    snapshot_root = trial_dir / "input_snapshot"
+    sample_hash, sample_files = _copy_snapshot_files(
+        sample_dir,
+        snapshot_root / "test_sample",
+        (
+            "sample.json",
+            "sample_index.json",
+            "raw_profiles.jsonl",
+            "preprocessed_profiles.jsonl",
+            "embeddings.jsonl",
+            "prompt_snapshot/preprosess.md",
+        ),
+    )
+    prompt_set_hash, prompt_set_files = _copy_snapshot_files(
+        prompt_set_dir,
+        snapshot_root / "user_prompt_set",
+        (
+            "prompt_set.json",
+            "user_prompts.jsonl",
+            "generated_query_plans.jsonl",
+            "tool_schema.json",
+            "prompt_snapshot/query.md",
+        ),
+    )
+    return (
+        sample_hash,
+        prompt_set_hash,
+        {
+            "test_sample": sample_files,
+            "user_prompt_set": prompt_set_files,
+        },
+    )
+
+
+def _copy_snapshot_files(
+    source_root: Path,
+    destination_root: Path,
+    relative_paths: tuple[str, ...],
+) -> tuple[str, dict[str, str]]:
+    hashes = {}
+    for relative_path in relative_paths:
+        source = source_root / relative_path
+        if not source.is_file():
+            raise CandidateSearchError(
+                "RETRIEVAL_TRIAL_INPUT_MISSING",
+                "retrieval trial input artifact is missing",
+                path=relative_path,
             )
-    _write_jsonl_file(trial_dir / "search_results.jsonl", search_results)
-    if errors:
-        _write_jsonl_file(trial_dir / "retrieval_errors.jsonl", errors)
-    status = {
-        "trial_id": trial_id,
-        "sample_id": sample_id,
-        "user_prompt_set_id": user_prompt_set_id,
-        "trial_status": "complete" if not errors else "partial",
-        "search_count": len(search_results),
-        "error_count": len(errors),
-        "updated_at": datetime.now(UTC).isoformat(),
-    }
-    _write_json_file(trial_dir / "status.json", status)
-    return status
+        destination = destination_root / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        hashes[relative_path] = sha256(destination.read_bytes()).hexdigest()
+    return canonical_hash(hashes), hashes
 
 
 def read_retrieval_trial(config: Any, trial_id: str) -> dict[str, Any]:
-    status_path = _retrieval_trial_dir(config, trial_id) / "status.json"
-    if not status_path.exists():
+    trial_dir = _retrieval_trial_dir(config, trial_id)
+    metadata_path = trial_dir / "trial.json"
+    if not metadata_path.exists():
         raise CandidateSearchError(
             "RETRIEVAL_TRIAL_NOT_FOUND",
             "retrieval trial does not exist",
             trial_id=trial_id,
         )
-    return json.loads(status_path.read_text(encoding="utf-8"))
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    results = _read_jsonl_file_if_exists(trial_dir / "search_results.jsonl")
+    errors = _read_jsonl_file_if_exists(trial_dir / "retrieval_errors.jsonl")
+    search_count = len(results)
+    error_count = len(errors)
+    expected_count = metadata.get("expected_search_count", 0)
+    if search_count == expected_count and error_count == 0:
+        trial_status = "complete"
+    elif search_count == 0 and error_count == 0:
+        trial_status = "missing"
+    else:
+        trial_status = "partial"
+    return {
+        **metadata,
+        "trial_status": trial_status,
+        "search_count": search_count,
+        "error_count": error_count,
+        "coverage": {
+            "completed": min(search_count + error_count, expected_count),
+            "total": expected_count,
+        },
+    }
 
 
 def list_retrieval_trials(config: Any) -> dict[str, Any]:
     root = _evaluation_data_dir(config) / "retrieval_trials"
     items = []
     for trial_dir in _object_dirs(root):
-        status = _read_json_file_if_exists(trial_dir / "status.json")
+        status = read_retrieval_trial(config, trial_dir.name)
         items.append(
             {
                 "id": status.get("trial_id", trial_dir.name),
                 "status": status,
-                "updated_at": status.get("updated_at"),
+                "created_at": status.get("created_at"),
             }
         )
     return _list_envelope("retrieval_trial", items)
@@ -602,14 +780,7 @@ def read_retrieval_trial_errors(
 
 def _require_ready_test_sample(config: Any, sample_id: str) -> Path:
     sample_dir = _require_test_sample_dir(config, sample_id)
-    status_path = sample_dir / "status.json"
-    if not status_path.exists():
-        raise CandidateSearchError(
-            "TEST_SAMPLE_NOT_READY",
-            "test sample has not been preprocessed and indexed",
-            sample_id=sample_id,
-        )
-    status = json.loads(status_path.read_text(encoding="utf-8"))
+    status = get_index_status(config, _test_sample_workspace(sample_dir))
     if status.get("preprocess_status") != "full" or status.get("index_status") != "full":
         raise CandidateSearchError(
             "TEST_SAMPLE_NOT_READY",
@@ -622,7 +793,7 @@ def _require_ready_test_sample(config: Any, sample_id: str) -> Path:
 
 def _require_ready_user_prompt_set(config: Any, set_id: str) -> Path:
     set_dir = _require_user_prompt_set_dir(config, set_id)
-    status = json.loads((set_dir / "status.json").read_text(encoding="utf-8"))
+    status = read_user_prompt_set(config, set_id)
     if status.get("mapping_status") != "ready":
         raise CandidateSearchError(
             "USER_PROMPT_SET_NOT_READY",
@@ -631,6 +802,125 @@ def _require_ready_user_prompt_set(config: Any, set_id: str) -> Path:
             status=status,
         )
     return set_dir
+
+
+def _calculate_user_prompt_set_status(
+    config: Any,
+    set_dir: Path,
+    set_id: str,
+) -> dict[str, Any]:
+    metadata = _read_json_file_if_exists(set_dir / "prompt_set.json")
+    try:
+        user_prompts = _read_jsonl_file(set_dir / "user_prompts.jsonl")
+        generated = _read_jsonl_file_if_exists(set_dir / "generated_query_plans.jsonl")
+        errors = _read_jsonl_file_if_exists(set_dir / "mapping_errors.jsonl")
+        query_guide = (set_dir / "prompt_snapshot" / "query.md").read_text(
+            encoding="utf-8"
+        )
+        tool_schema = json.loads(
+            (set_dir / "tool_schema.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as exc:
+        raise CandidateSearchError(
+            "ARTIFACT_READ_FAILED",
+            "user prompt set artifacts cannot be read",
+            set_id=set_id,
+            reason=str(exc),
+        ) from exc
+
+    query_guide_hash = canonical_hash(query_guide)
+    tool_schema_hash = canonical_hash(tool_schema)
+    model_config_hash = canonical_hash(
+        {
+            "base_url": config.base_url,
+            "model": config.preprocess_model,
+        }
+    )
+    base = {**metadata, "set_id": metadata.get("set_id", set_id)}
+    try:
+        _require_current_user_prompt_set_schema(set_dir, set_id)
+    except CandidateSearchError as exc:
+        return {
+            **base,
+            "total_prompts": len(user_prompts),
+            "mapped_count": 0,
+            "failed_count": 0,
+            "mapping_status": "stale",
+            "schema_stale": True,
+            "readiness_error": exc.to_dict()["error"],
+        }
+
+    generated_by_id = {}
+    duplicate_mapping_ids = set()
+    for record in generated:
+        prompt_id = record.get("prompt_id")
+        if prompt_id in generated_by_id:
+            duplicate_mapping_ids.add(prompt_id)
+        generated_by_id[prompt_id] = record
+
+    valid_mapping_ids = set()
+    for prompt in user_prompts:
+        prompt_id = prompt["prompt_id"]
+        record = generated_by_id.get(prompt_id)
+        if record is None or prompt_id in duplicate_mapping_ids:
+            continue
+        if not _mapping_cache_matches(
+            record,
+            user_prompt_hash=canonical_hash(prompt["text"]),
+            query_guide_hash=query_guide_hash,
+            tool_schema_hash=tool_schema_hash,
+            model_config_hash=model_config_hash,
+        ):
+            continue
+        try:
+            validate_generated_search_arguments(
+                {
+                    "query_plan": record.get("query_plan"),
+                    "options": record.get("options"),
+                }
+            )
+        except CandidateSearchError:
+            continue
+        valid_mapping_ids.add(prompt_id)
+
+    prompts_by_id = {prompt["prompt_id"]: prompt for prompt in user_prompts}
+    failed_ids = set()
+    for error in errors:
+        prompt_id = error.get("prompt_id")
+        prompt = prompts_by_id.get(prompt_id)
+        if prompt is None or prompt_id in valid_mapping_ids:
+            continue
+        if (
+            error.get("query_schema_version") == QUERY_SCHEMA_VERSION
+            and error.get("user_prompt_hash") == canonical_hash(prompt["text"])
+            and error.get("query_guide_hash") == query_guide_hash
+            and error.get("tool_schema_hash") == tool_schema_hash
+            and error.get("model_config_hash") == model_config_hash
+        ):
+            failed_ids.add(prompt_id)
+
+    mapped_count = len(valid_mapping_ids)
+    failed_count = len(failed_ids)
+    exact_mapping_ids = set(generated_by_id) == set(prompts_by_id)
+    if (
+        mapped_count == len(user_prompts)
+        and failed_count == 0
+        and exact_mapping_ids
+        and not duplicate_mapping_ids
+    ):
+        mapping_status = "ready"
+    elif mapped_count == 0 and failed_count == 0:
+        mapping_status = "missing"
+    else:
+        mapping_status = "partial"
+    return {
+        **base,
+        "total_prompts": len(user_prompts),
+        "mapped_count": mapped_count,
+        "failed_count": failed_count,
+        "mapping_status": mapping_status,
+        "schema_stale": False,
+    }
 
 
 def _mapping_cache_matches(
@@ -642,11 +932,60 @@ def _mapping_cache_matches(
     model_config_hash: str,
 ) -> bool:
     return (
-        record.get("user_prompt_hash") == user_prompt_hash
+        record.get("query_schema_version") == QUERY_SCHEMA_VERSION
+        and record.get("user_prompt_hash") == user_prompt_hash
         and record.get("query_guide_hash") == query_guide_hash
         and record.get("tool_schema_hash") == tool_schema_hash
         and record.get("model_config_hash") == model_config_hash
     )
+
+
+def _call_model_with_transport_retries(call: Any, attempts: int = 3) -> Any:
+    last_error = None
+    for _ in range(attempts):
+        try:
+            return call()
+        except Exception as exc:  # noqa: BLE001 - retry only known transport failures.
+            if not _is_retryable_model_transport_error(exc):
+                raise
+            last_error = exc
+    assert last_error is not None
+    raise last_error
+
+
+def _is_retryable_model_transport_error(exc: Exception) -> bool:
+    return type(exc).__name__ in {
+        "APIConnectionError",
+        "APITimeoutError",
+        "InternalServerError",
+        "RateLimitError",
+    }
+
+
+def _require_current_user_prompt_set_schema(set_dir: Path, set_id: str) -> None:
+    metadata = _read_json_file_if_exists(set_dir / "prompt_set.json")
+    stored_schema = _read_json_file_if_exists(set_dir / "tool_schema.json")
+    current_schema = search_tool_schema()
+    query_prompt_path = set_dir / "prompt_snapshot" / "query.md"
+    query_prompt_hash = (
+        canonical_hash(query_prompt_path.read_text(encoding="utf-8"))
+        if query_prompt_path.is_file()
+        else None
+    )
+    if (
+        not metadata
+        or metadata.get("query_schema_version") != QUERY_SCHEMA_VERSION
+        or stored_schema is None
+        or metadata.get("tool_schema_hash") != canonical_hash(stored_schema)
+        or canonical_hash(stored_schema) != canonical_hash(current_schema)
+        or metadata.get("query_prompt_hash") != query_prompt_hash
+    ):
+        raise CandidateSearchError(
+            "USER_PROMPT_SET_SCHEMA_STALE",
+            "user prompt set was created with a different query schema",
+            set_id=set_id,
+            expected_query_schema_version=QUERY_SCHEMA_VERSION,
+        )
 
 
 def _load_user_prompts(path: Path) -> list[dict[str, Any]]:
@@ -682,31 +1021,6 @@ def _load_user_prompts(path: Path) -> list[dict[str, Any]]:
     if not normalized:
         raise CandidateSearchError("EMPTY_USER_PROMPT_SET", "user prompt set must not be empty")
     return normalized
-
-
-def _write_user_prompt_set_status(
-    set_dir: Path,
-    *,
-    set_id: str,
-    total_prompts: int,
-    mapped_count: int,
-    failed_count: int,
-    mapping_status: str,
-    generated_count: int = 0,
-    skipped_count: int = 0,
-) -> dict[str, Any]:
-    status = {
-        "set_id": set_id,
-        "total_prompts": total_prompts,
-        "mapped_count": mapped_count,
-        "failed_count": failed_count,
-        "generated_count": generated_count,
-        "skipped_count": skipped_count,
-        "mapping_status": mapping_status,
-        "updated_at": datetime.now(UTC).isoformat(),
-    }
-    _write_json_file(set_dir / "status.json", status)
-    return status
 
 
 def _write_test_sample_cohort(
@@ -749,16 +1063,13 @@ def _write_test_sample_cohort(
         ]
     }
     _write_json_file(sample_dir / "sample_index.json", index)
+    existing_metadata = _read_json_file_if_exists(sample_dir / "sample.json")
     metadata = {
         "sample_id": sample_id,
         "sample_size": sample_size,
         "seed": actual_seed,
         "total_raw_candidates": len(raw_dataset.rows),
-        "status": {
-            "preprocess_status": "missing",
-            "index_status": "missing",
-        },
-        "updated_at": datetime.now(UTC).isoformat(),
+        "created_at": existing_metadata.get("created_at", datetime.now(UTC).isoformat()),
     }
     _write_json_file(sample_dir / "sample.json", metadata)
     return metadata
@@ -770,7 +1081,6 @@ def _discard_test_sample_build_artifacts(sample_dir: Path) -> None:
         "embeddings.jsonl",
         "preprocess_errors.jsonl",
         "index_errors.jsonl",
-        "status.json",
     ):
         path = sample_dir / name
         if path.exists():
@@ -856,6 +1166,7 @@ def _test_sample_workspace(sample_dir: Path) -> BuildWorkspace:
     return BuildWorkspace(
         raw_profiles_path=sample_path,
         processed_dir=sample_dir,
+        preprocess_prompt_path=sample_dir / "prompt_snapshot" / "preprosess.md",
     )
 
 
@@ -863,13 +1174,29 @@ def _write_jsonl_file(path: Path, records: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="\n") as handle:
         for record in records:
-            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True))
+            handle.write(
+                json.dumps(
+                    record,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    allow_nan=False,
+                )
+            )
             handle.write("\n")
 
 
 def _write_json_file(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    path.write_text(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        ),
+        encoding="utf-8",
+    )
 
 
 def _read_jsonl_file(path: Path) -> list[dict[str, Any]]:
@@ -885,6 +1212,12 @@ def _read_jsonl_file(path: Path) -> list[dict[str, Any]]:
                 raise ValueError(f"JSONL row {index} must be an object: {path}")
             records.append(value)
     return records
+
+
+def _read_jsonl_file_if_exists(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    return _read_jsonl_file(path)
 
 
 def _read_json_file_if_exists(path: Path) -> dict[str, Any]:
@@ -913,7 +1246,7 @@ def _object_dirs(root: Path) -> list[Path]:
 def _list_envelope(object_type: str, items: list[dict[str, Any]]) -> dict[str, Any]:
     ordered = sorted(
         items,
-        key=lambda item: item.get("updated_at") or "",
+        key=lambda item: item.get("created_at") or "",
         reverse=True,
     )
     return {
