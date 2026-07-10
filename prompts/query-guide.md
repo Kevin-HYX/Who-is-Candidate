@@ -52,4 +52,4 @@ Write soft preference `text` as concrete work content or business context, not j
 
 For avoid-style requirements, do not create an `avoid` field. Instead, describe the unwanted work positively and use a negative `weight`.
 
-Use `options.top_k` when the user asks for a result count. If no count is stated, use `10`.
+Use `options.top_k` when the user asks for a result count. If no count is stated, this generation guide uses `10`. This is a QueryPlan generation policy; the search tool itself defaults to `20` only when `options.top_k` is omitted.

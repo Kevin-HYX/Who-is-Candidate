@@ -1,6 +1,6 @@
 # Desensitization Profiles 数据结构分析
 
-- 原始文件已复制到：`D:\Who is Candidate\data\desensitization_profiles\1000_Desensitization_profiles.jsonl`
+- 原始文件：`data/desensitization_profiles/1000_Desensitization_profiles.jsonl`
 - 记录数：1000
 - 解析错误：0
 - 文件大小：5,436,709 bytes
@@ -99,14 +99,6 @@
 | `is_current` | 1751/1751 | boolean:1751 | 是否当前教育经历 |
 | `major` | 1751/1751 | string:1751 | 专业 |
 | `order_in_profile` | 1751/1751 | integer:1751 | 在 profile 中的排序 |
-
-## 建议入库模型
-
-- `profiles`：存 `user_id`、`headline`、`summary`、当前经历摘要、`total_experience_duration_months` 等一人一行字段。
-- `profile_skills`：`user_id` + `skill`，一人多技能。
-- `profile_experience`：`user_id` + 工作经历字段，按 `order_in_profile` 排序。
-- `profile_education`：`user_id` + 教育经历字段，按 `order_in_profile` 排序。
-- `profile_awards/courses/certifications/publications/patents`：当前样本里这些数组元素是字符串，可按 `user_id` + `value` 存明细表。
 
 ## 文件清单
 
