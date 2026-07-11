@@ -168,13 +168,12 @@ Never put a child industry or broad free-text label into an `industries` hard co
 Meaning: whether the raw profile explicitly indicates that the candidate currently has an active work experience.
 
 - Allowed operator: `=`
-- When raw `is_working` is a Boolean, it is the authoritative value: `true` maps to `true` and `false` maps to `false`.
-- Only when raw `is_working` is absent or not Boolean does the formula inspect `experience[].is_current`: any explicit `true` maps to `true`; a non-empty experience list whose entries all have Boolean `is_current=false` maps to `false`.
-- Conflicting `is_working` and `experience[].is_current` signals are resolved in favor of the Boolean `is_working` field.
+- `true`: explicitly currently working or has an explicitly current experience
+- `false`: explicitly not currently working and no experience is marked current
 
 Missing current-work evidence is not `false`; it is insufficient evidence, so the Tool keeps that candidate and reports the uncertainty.
 
-This is a coarse raw-data signal, not a semantic guarantee of a substantive current occupation. Source data may mark status entries such as `Retired`, student-only activity, or another non-occupational entry as current. Use this hard constraint only when the user explicitly requires the raw active-work signal. If the user requires a verified substantive current occupation, do not pretend this field enforces that guarantee; use current-role hard constraints only when their own meaning is explicit.
+This is a coarse raw-data signal, not a semantic guarantee of a substantive current occupation. Source data may mark status entries such as `Retired`, student-only activity, or another non-occupational entry as current. Use this hard constraint only when the user explicitly requires the raw active-work signal. If the user requires a verified substantive current occupation, warn that this field cannot enforce that requirement perfectly, use current-role hard constraints only when their own meaning is explicit, and inspect returned `raw_profile` before presenting a candidate as currently employed.
 
 Do not hard-filter on certificates, skills, locations, company type, team size, achievements, domain-specific tenure, or other sparse evidence fields. Convert those requirements into soft preferences.
 
@@ -231,7 +230,7 @@ Weights express continuous relative importance within this QueryPlan. They are n
 effective_weight_i = input_weight_i / sum(abs(all_input_weights))
 ```
 
-Before output rounding, the absolute effective weights sum to `1.0`, so adding preferences or increasing every input weight cannot inflate the total score. The Tool returns each effective `weight` rounded to six decimal places, so the displayed absolute weights may differ from `1.0` by a few millionths.
+The absolute effective weights therefore sum to `1.0`, so adding preferences or increasing every input weight cannot inflate the total score. The `weight` returned in each `soft_preference_scores` item is this effective normalized weight.
 
 Use these continuous ranges as guidance rather than as enumerated values:
 
@@ -269,7 +268,7 @@ Relative ratios still matter before normalization: an input weight of `1.6` has 
 | "Needs Python backend experience" | `{"dimension":"skills_search_text","text":"Use Python for backend software development.","weight":1.0}` | `{"dimension":"skills_search_text","text":"Build Python APIs, data pipelines, and microservices.","weight":1.0}` | Backend work does not authorize guessed APIs, pipelines, or microservices. Preserve only the relationship the user supplied. |
 | "Has worked in healthcare finance" | `{"dimension":"domain_search_text","text":"Work in healthcare finance.","weight":1.0}` | `{"dimension":"domain_search_text","text":"Handle patient billing, insurance claims, revenue cycle, reimbursement, and healthcare compliance.","weight":1.0}` | Healthcare finance does not authorize guessed child processes. Add them only when the user names them. |
 | "Has managed a team" | `{"dimension":"ownership_search_text","text":"Directly manage a team of employees.","weight":1.0}` | `{"dimension":"ownership_search_text","text":"Assign work, give performance feedback, develop employees, and own team delivery.","weight":1.0}` | Team management establishes people-management scope, not every standard management duty. |
-| "Has delivered a complete system implementation" | `{"dimension":"experience_search_text","text":"Deliver a complete system implementation end to end.","weight":1.0}` | `{"dimension":"experience_search_text","text":"Lead requirements, solution design, cross-team execution, testing, and production launch.","weight":1.0}` | `Complete` supports end-to-end delivery, but it does not reveal the system type, phases, or leadership duties involved. |
+| "Has delivered a complete system implementation" | `{"dimension":"experience_search_text","text":"Deliver a business-system implementation end to end.","weight":1.0}` | `{"dimension":"experience_search_text","text":"Lead requirements, solution design, cross-team execution, testing, and production launch.","weight":1.0}` | `Complete` supports end-to-end delivery, but it does not reveal the phases or leadership duties involved. |
 | "Prefer measurable cost or efficiency outcomes" | `{"dimension":"achievements_search_text","text":"Produce measurable cost reduction or efficiency improvement.","weight":0.8}` | `{"dimension":"achievements_search_text","text":"Reduce costs by 50% and improve operational error rates.","weight":0.8}` | The percentage and error-rate outcome are fabricated unless the user supplied them. |
 | "Prefer finance education or CPA" | `{"dimension":"education_search_text","text":"Have an educational background in accounting or finance, or hold a professional finance qualification such as CPA.","weight":0.6}` | `{"dimension":"education_search_text","text":"Good education with certifications","weight":0.6}` | The counterexample does not name the relevant field or qualification. |
 

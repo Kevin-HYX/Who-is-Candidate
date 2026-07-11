@@ -23,6 +23,8 @@ Explain candidate facts only from `results[].raw_profile`. Use `soft_preference_
 
 Treat missing, empty, `unknown`, `not_provided`, and `insufficient_evidence` fields as unknown. Say that the profile does not provide enough evidence; do not claim the candidate lacks the attribute.
 
+`is_currently_working` is a coarse raw-data signal, not proof of a substantive current occupation. If the user requires verified current employment, warn that this field cannot enforce the requirement perfectly and inspect each returned `raw_profile` before presenting the candidate as currently employed.
+
 If hard filtering leaves too few candidates, suggest which explicit hard constraint the user could relax. Do not silently convert a hard constraint into a soft preference.
 
 If `returned_count` is greater than `requested_top_k`, explain that all candidates sharing the boundary rank were returned.

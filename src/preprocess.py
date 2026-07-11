@@ -489,6 +489,11 @@ def validate_preprocess_model_output(profile: Any) -> None:
             f"embedding_search_texts.{dimension}",
         )
         normalized = " ".join(text.strip().lower().split())
+        if normalized != MISSING_SEARCH_TEXT and len(text.split()) > 60:
+            raise ValueError(
+                f"embedding_search_texts.{dimension} must contain at most "
+                "60 English words"
+            )
         if normalized != MISSING_SEARCH_TEXT and (
             normalized in {"unknown", "insufficient_evidence"}
             or re.search(

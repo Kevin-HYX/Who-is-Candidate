@@ -71,11 +71,7 @@ Meaning: the candidate's highest completed education level, represented by an or
 
 ### `role_family`
 
-Meaning: `role_family` represents the primary work function of the Primary Current Position. It is not the employer's industry, historical profession, broad career identity, or seniority. Historical positions cannot establish a `high` current `role_family`; when current-function evidence is missing or ambiguous, the Tool does not hard-eliminate the candidate on this field. Use this hard constraint only when the user unmistakably requires that exact function in the candidate's current primary position. Words such as `current`, `professional`, `specialist`, `leader`, or `experienced` do not by themselves make every nearby functional phrase a current-role requirement. `Find a currently working professional with sales and client-advisor experience` maps current employment to `is_currently_working` and sales history to concrete soft preferences; `Find someone whose current primary role is Sales` may use `role_family in ["Sales"]`. When the need can be satisfied by relevant prior functional experience or by a cross-functional occupational title, use a concrete soft preference instead. Use only `in` or `not_in`; `value` must be a non-empty array of exact labels from this project-owned 20-value role table.
-
-Before returning, audit every `role_family` hard constraint separately. Identify the exact user phrase that attaches the requested function to the candidate's current primary position, such as `current finance manager`, `currently works in Sales`, or `current primary role is Engineering`. If no such phrase exists, remove the hard constraint and preserve the functional experience as a concrete soft preference. `Find an operations leader for an analytical laboratory` does not pass this current-role gate; it may use laboratory-operations responsibilities, management scope, and industry evidence, but not `role_family in ["Operations"]` unless the user explicitly requires Operations as the current primary role.
-
-A canonical `role_family` hard constraint captures only its broad 20-value function. It never preserves a narrower occupation, specialty, or title. If the user asks for a current `application architect` or `technical architect`, `role_family in ["Engineering and Technical"]` may enforce the broad current function, but a concrete soft preference must still preserve the requested architecture work. The same rule applies to other narrower occupations: never mark a specific user need as covered merely because its parent role family is hard-filtered.
+Meaning: `role_family` represents the primary work function of the Primary Current Position. It is not the employer's industry, historical profession, broad career identity, or seniority. Historical positions cannot establish a `high` current `role_family`; when current-function evidence is missing or ambiguous, the Tool does not hard-eliminate the candidate on this field. Use this hard constraint only when the user requires the candidate's current primary function. Use a concrete soft preference when the user instead wants any relevant prior functional experience. Use only `in` or `not_in`; `value` must be a non-empty array of exact labels from this project-owned 20-value role table.
 
 | Value | Meaning and boundary |
 |---|---|
@@ -119,7 +115,7 @@ Meaning: the LinkedIn-aligned organizational band of the candidate's Primary Cur
 
 The six-level field intentionally has no separate Manager value. A Manager-level requirement maps to `Mid-Senior level`. If the user also requires actual people management, add a separate `management_scope >= manage_team` hard constraint; do not infer people management from position level. The `Executive` band cannot distinguish Vice President from C-Level. Preserve a narrower explicit executive requirement in a concrete soft preference and use another supported hard field only when its own meaning truly matches.
 
-Do not create a `seniority_level` hard constraint from professional capability, years, age, tenure, education, credentials, achievements, compensation, or vague praise such as experienced or expert. Those needs belong in numeric hard fields or concrete soft preferences. `Leader`, `Lead`, and `Head` are not stable organizational bands and must not be silently mapped to `Mid-Senior level`, `Director`, or `Executive`. For example, `operations leader who has managed technicians` authorizes `management_scope >= manage_team`, but it does not authorize any `seniority_level` constraint unless the user separately names a supported position level.
+Do not create a `seniority_level` hard constraint from professional capability, years, age, tenure, education, credentials, achievements, compensation, or vague praise such as experienced or expert. Those needs belong in numeric hard fields or concrete soft preferences. Head is not a stable level across organizations and must not be silently mapped to Director or Executive.
 
 ### `management_scope`
 
@@ -168,13 +164,10 @@ Never put a child industry or broad free-text label into an `industries` hard co
 Meaning: whether the raw profile explicitly indicates that the candidate currently has an active work experience.
 
 - Allowed operator: `=`
-- When raw `is_working` is a Boolean, it is the authoritative value: `true` maps to `true` and `false` maps to `false`.
-- Only when raw `is_working` is absent or not Boolean does the formula inspect `experience[].is_current`: any explicit `true` maps to `true`; a non-empty experience list whose entries all have Boolean `is_current=false` maps to `false`.
-- Conflicting `is_working` and `experience[].is_current` signals are resolved in favor of the Boolean `is_working` field.
+- `true`: explicitly currently working or has an explicitly current experience
+- `false`: explicitly not currently working and no experience is marked current
 
 Missing current-work evidence is not `false`; it is insufficient evidence, so the Tool keeps that candidate and reports the uncertainty.
-
-This is a coarse raw-data signal, not a semantic guarantee of a substantive current occupation. Source data may mark status entries such as `Retired`, student-only activity, or another non-occupational entry as current. Use this hard constraint only when the user explicitly requires the raw active-work signal. If the user requires a verified substantive current occupation, do not pretend this field enforces that guarantee; use current-role hard constraints only when their own meaning is explicit.
 
 Do not hard-filter on certificates, skills, locations, company type, team size, achievements, domain-specific tenure, or other sparse evidence fields. Convert those requirements into soft preferences.
 
@@ -202,26 +195,14 @@ Do not hard-filter on certificates, skills, locations, company type, team size, 
 
 Follow all of these rules:
 
-1. Describe observable work, not only the name of a person or job. Use an action + object + context only to the extent that the user supplied those elements. Never fill a missing action, object, tool, customer, or business process from what people in that occupation commonly do.
+1. Describe observable work, not the name of a person or job. Prefer an action + object + context, such as "build monthly forecasts for hospital revenue operations".
 2. Keep one coherent intent in each preference. Split genuinely different needs into separate items so each can receive its own dimension and weight.
-3. Expand an ambiguous title or abbreviation only from meaning the user actually supplied. Replace `PM` with product-management or project-delivery work only when the surrounding request resolves that meaning. A bare `Manager` may establish a seniority requirement, but it does not reveal what is managed and cannot create people-management, budget, decision-authority, or ownership text.
+3. Expand ambiguous titles and abbreviations. Replace "PM" with the intended product-management or project-delivery work; replace "Manager" with what is managed.
 4. Preserve exact skill, system, certification, and business-process names inside a natural description when the user supplied them.
 5. Do not write Boolean logic, instructions, scoring language, or phrases such as "must match", "high priority", "candidate should", or "give more points" inside `text`; express importance only through `weight`.
-6. Do not invent tools, projects, customers, responsibilities, metrics, or standard duties from a familiar career archetype. Preserve the user's abstraction level. `Manufacturing finance` does not authorize cost accounting, plant controllership, inventory valuation, or production analysis unless the user names those needs. `Finance Manager` does not authorize an `ownership_search_text` preference for managing a finance team. Adding plausible industry examples is still invention when they narrow the embedding away from the request.
+6. Do not invent tools, projects, customers, responsibilities, or metrics that the user did not request.
 7. Do not duplicate the same semantic need across several dimensions merely to increase its influence. One need should normally appear once.
 8. A specific sub-industry or business scenario should remain specific in `domain_search_text`, even when a related top-level industry is also used as a hard constraint.
-
-### User-source traceability gate
-
-Before returning JSON, audit every content-bearing word or phrase in every soft preference. It must be traceable to exactly one of: the user's explicit wording, a direct synonym, an unambiguous abbreviation expansion, or an immediate broader parent concept needed for embedding recall. Delete anything that is only a plausible child example, standard duty, common tool, or career-template completion. Do not replace a deleted phrase with another invented example.
-
-Broad user language must remain broad. A parent concept never authorizes guessed children. For the user phrase `work in a manufacturing environment`, a valid domain preference is `Finance work in a manufacturing environment.` Invalid additions include `cost accounting`, `plant controllership`, `inventory valuation`, `production cost analysis`, or any other manufacturing-finance specialty the user did not state. For `Finance Manager`, the allowed hard interpretation is the finance role plus manager-level seniority; it does not authorize managing people, budgets, accounting operations, or any other stereotypical manager duty.
-
-Run this deletion audit after drafting, not before. A fluent and specific sentence that fails traceability is worse than a short faithful phrase.
-
-### User-requirement coverage gate
-
-After the traceability deletion audit, enumerate the user's explicit requirements and check that each is represented exactly once by either a semantically exact hard constraint or one suitable soft preference. A broad parent hard constraint does not cover a narrower child requirement: `Engineering and Technical` does not cover `application or technical architecture`, and a top-level industry does not cover a named sub-industry or business process. Add the missing faithful soft preference without inventing standard duties or examples. Conversely, do not duplicate a requirement that is already represented at the same semantic precision.
 
 ### Weight meaning
 
@@ -231,7 +212,7 @@ Weights express continuous relative importance within this QueryPlan. They are n
 effective_weight_i = input_weight_i / sum(abs(all_input_weights))
 ```
 
-Before output rounding, the absolute effective weights sum to `1.0`, so adding preferences or increasing every input weight cannot inflate the total score. The Tool returns each effective `weight` rounded to six decimal places, so the displayed absolute weights may differ from `1.0` by a few millionths.
+The absolute effective weights therefore sum to `1.0`, so adding preferences or increasing every input weight cannot inflate the total score. The `weight` returned in each `soft_preference_scores` item is this effective normalized weight.
 
 Use these continuous ranges as guidance rather than as enumerated values:
 
@@ -257,20 +238,18 @@ Apply all of these boundaries:
 8. Do not duplicate one semantic need across preferences to accumulate effective weight.
 9. Omit any preference whose intended absolute weight would be below `0.1`.
 
-Before returning, inspect every preference whose absolute input weight is above `1.0`. Identify the user's explicit priority phrase that authorizes it, such as `important`, `prioritize`, `primary`, `core`, or `most important`. If no such phrase exists, reduce the absolute weight to `1.0` or below. Being mentioned first, receiving more words, defining the occupation, or seeming central to the request does not count as priority language.
-
 Relative ratios still matter before normalization: an input weight of `1.6` has twice the influence of `0.8` in the same QueryPlan. `weight` must never be `0`.
 
 ### Good examples and counterexamples
 
 | User need | Good soft preference | Counterexample | Why the counterexample is wrong |
 |---|---|---|---|
-| "Find a project manager" | `{"dimension":"responsibilities_search_text","text":"Perform project management and project delivery work.","weight":1.0}` | `{"dimension":"responsibilities_search_text","text":"Define scope and milestones, coordinate cross-functional teams, and manage schedules, budgets, and risks.","weight":1.0}` | The counterexample fills in a standard project-manager duty template that the user did not supply. A concise faithful occupational concept is better than invented specificity. |
-| "Needs Python backend experience" | `{"dimension":"skills_search_text","text":"Use Python for backend software development.","weight":1.0}` | `{"dimension":"skills_search_text","text":"Build Python APIs, data pipelines, and microservices.","weight":1.0}` | Backend work does not authorize guessed APIs, pipelines, or microservices. Preserve only the relationship the user supplied. |
-| "Has worked in healthcare finance" | `{"dimension":"domain_search_text","text":"Work in healthcare finance.","weight":1.0}` | `{"dimension":"domain_search_text","text":"Handle patient billing, insurance claims, revenue cycle, reimbursement, and healthcare compliance.","weight":1.0}` | Healthcare finance does not authorize guessed child processes. Add them only when the user names them. |
-| "Has managed a team" | `{"dimension":"ownership_search_text","text":"Directly manage a team of employees.","weight":1.0}` | `{"dimension":"ownership_search_text","text":"Assign work, give performance feedback, develop employees, and own team delivery.","weight":1.0}` | Team management establishes people-management scope, not every standard management duty. |
-| "Has delivered a complete system implementation" | `{"dimension":"experience_search_text","text":"Deliver a complete system implementation end to end.","weight":1.0}` | `{"dimension":"experience_search_text","text":"Lead requirements, solution design, cross-team execution, testing, and production launch.","weight":1.0}` | `Complete` supports end-to-end delivery, but it does not reveal the system type, phases, or leadership duties involved. |
-| "Prefer measurable cost or efficiency outcomes" | `{"dimension":"achievements_search_text","text":"Produce measurable cost reduction or efficiency improvement.","weight":0.8}` | `{"dimension":"achievements_search_text","text":"Reduce costs by 50% and improve operational error rates.","weight":0.8}` | The percentage and error-rate outcome are fabricated unless the user supplied them. |
+| "Find a project manager" | `{"dimension":"responsibilities_search_text","text":"Own project delivery by defining scope, plans, and milestones, coordinating cross-functional teams, and managing schedule, budget, and risk.","weight":1.0}` | `{"dimension":"responsibilities_search_text","text":"Project Manager","weight":1.0}` | A title does not describe the work and is easily confused with other Manager roles. |
+| "Needs Python backend experience" | `{"dimension":"skills_search_text","text":"Use Python to build and maintain backend services and APIs, including data processing, business logic, and service integration.","weight":1.0}` | `{"dimension":"skills_search_text","text":"Python, backend, API","weight":1.0}` | A keyword pile lacks application context and produces weak semantic alignment. |
+| "Has worked in healthcare finance" | `{"dimension":"domain_search_text","text":"Work in hospital or healthcare finance involving patient billing, insurance claims, revenue cycle, reimbursement, or compliance.","weight":1.2}` | `{"dimension":"domain_search_text","text":"Healthcare","weight":1.2}` | The broad label loses the precise business processes the user cares about. |
+| "Has managed a team" | `{"dimension":"ownership_search_text","text":"Directly manage employees, including work assignment, performance feedback, people development, and accountability for team delivery.","weight":1.0}` | `{"dimension":"ownership_search_text","text":"Manager with strong leadership","weight":1.0}` | A title and personality claim do not establish the ownership boundary. |
+| "Has delivered a complete system implementation" | `{"dimension":"experience_search_text","text":"Deliver a business-system implementation end to end, from requirements and solution design through cross-team execution and production launch.","weight":1.0}` | `{"dimension":"experience_search_text","text":"Highly experienced with many systems","weight":1.0}` | Vague praise gives the embedding no concrete experience pattern. |
+| "Prefer measurable cost or efficiency outcomes" | `{"dimension":"achievements_search_text","text":"Produce verifiable cost reduction, efficiency improvement, or error-rate reduction through process, system, or operational changes.","weight":0.8}` | `{"dimension":"achievements_search_text","text":"Excellent performer who reduced costs by 50%","weight":0.8}` | "Excellent" is vague, and `50%` is fabricated unless the user explicitly requested that threshold. |
 | "Prefer finance education or CPA" | `{"dimension":"education_search_text","text":"Have an educational background in accounting or finance, or hold a professional finance qualification such as CPA.","weight":0.6}` | `{"dimension":"education_search_text","text":"Good education with certifications","weight":0.6}` | The counterexample does not name the relevant field or qualification. |
 
 ### Avoid-style requirements
@@ -279,7 +258,7 @@ Embedding does not reliably understand negation. Never write `no audit work`, `n
 
 Describe the unwanted profile positively and assign a negative weight:
 
-- Good: `{"dimension":"responsibilities_search_text","text":"Perform primarily external audit work.","weight":-0.8}`
+- Good: `{"dimension":"responsibilities_search_text","text":"Perform primarily external audit work, including audit testing, workpapers, and compliance review.","weight":-0.8}`
 - Bad: `{"dimension":"responsibilities_search_text","text":"Do not have a pure audit background.","weight":0.8}`
 
 The good version asks the embedding to measure similarity to audit work and then lowers the score through the negative weight. The bad version may be embedded as if the user wanted audit experience.
@@ -292,22 +271,22 @@ For "Prefer healthcare finance experience, revenue-cycle ownership, and financia
 [
   {
     "dimension": "domain_search_text",
-    "text": "Work in healthcare finance.",
-    "weight": 1.0
+    "text": "Work in hospital or healthcare finance involving patient billing, insurance claims, revenue cycle, reimbursement, or compliance.",
+    "weight": 1.2
   },
   {
-    "dimension": "ownership_search_text",
-    "text": "Own revenue-cycle processes in healthcare finance.",
+    "dimension": "responsibilities_search_text",
+    "text": "Own revenue-cycle, billing, accounts-receivable, reconciliation, or finance-operations processes and drive cross-functional issue resolution.",
     "weight": 1.0
   },
   {
     "dimension": "skills_search_text",
-    "text": "Use financial systems in healthcare finance or revenue-cycle work.",
+    "text": "Use ERP, financial-management, billing, or revenue-cycle systems to manage financial data and business processes.",
     "weight": 0.7
   },
   {
     "dimension": "responsibilities_search_text",
-    "text": "Perform primarily external audit work.",
+    "text": "Perform primarily external audit work, including audit testing, workpapers, and compliance review.",
     "weight": -0.8
   }
 ]

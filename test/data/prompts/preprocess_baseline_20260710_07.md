@@ -46,20 +46,14 @@ An `unknown` value may use `medium` when substantial evidence is conflicting or 
 
 Apply these field-specific thresholds before assigning `high`:
 
-- `role_family`: only the Primary Current Position may establish the candidate's current primary work function. An explicit and unambiguous current title, current source role, or current responsibility must directly establish one canonical work function. Historical positions, employer industry, education, skills, or a generic title alone cannot establish `high`.
+- `role_family`: an explicit and unambiguous title, source role, or responsibility directly establishes one canonical work function. Employer industry, education, skills, or a generic title alone cannot establish `high`.
 - `seniority_level`: only the Primary Current Position can establish the current position level. `high` requires either a recognized standardized level for that position or an unambiguous current title that directly satisfies one of the six rules below. Historical positions, career length, professional capability, education, credentials, achievements, and missing evidence cannot establish `high`.
 - `management_scope`: explicit evidence establishes project leadership, direct reports, team supervision, budget or policy authority, or organizational decision rights. A title containing `Manager`, `Director`, `Lead`, `Owner`, or another seniority term alone cannot establish `high` management scope.
 - `industries`: An explicit `experience[].industry` value must deterministically map to every returned top-level industry before confidence can be `high`. Skills, education, job function, company name, company tags, employer reputation, or industry stereotypes cannot establish `high`. They may support `medium` when the mapping is plausible but not hard-filter safe. If multiple industries are returned, every item must independently meet the `high` threshold for the array to be `high`.
 
 If a field does not meet its field-specific `high` threshold, use `medium` or `low` even when the proposed value seems likely.
 
-`role_family.value` is the candidate's primary work function, not the employer's industry and not seniority by itself. `role_family` represents the primary work function of the Primary Current Position.
-
-Determine the Primary Current Position for `role_family` using the same current-position selection rules defined below for `seniority_level`: exclude non-position status entries, prefer the current entry matched by `active_experience_title`, otherwise use current `order_in_profile == 1`. Other concurrent positions and all historical positions remain useful search-text evidence but cannot change the hard `role_family`. Historical positions cannot establish a `high` current `role_family`. If no Primary Current Position remains, `role_family.value` must be `unknown`; never return a historical function with `medium` confidence. If the selected current position does not explicitly establish one function, use `unknown` with `medium` or `low` confidence instead of borrowing a clearer historical function.
-
-For `role_family`, `high` requires one unambiguous current primary function and no contradictory current-function evidence. Compare the selected position's `active_experience_department`, matching `experience[].role`, title, description, and any summary clause explicitly tied to that current position. If these sources point to different canonical functions, or the current work materially combines multiple functions, return the best-supported value only with `medium` or `low`; it must not hard-eliminate. For example, a `Sales And Purchasing Administrator` whose current evidence spans sales records, procurement logistics, contracts, and administration cannot receive `Administrative/high` or `Sales/high`. A generic current title such as `Associate` plus conflicting administrative metadata and a legal career summary also cannot receive any current function with `high`.
-
-`role_family.value` must be exactly one of these 20 project-canonical labels:
+`role_family.value` is the candidate's primary work function, not the employer's industry and not seniority by itself. It must be exactly one of these 20 project-canonical labels:
 
 | Value | Meaning and boundary |
 |---|---|
@@ -90,11 +84,10 @@ Use the exact English spelling and punctuation above. Do not create narrower, co
 
 Determine the Primary Current Position before classifying its level:
 
-1. Treat status entries and non-occupational self-labels such as `Retired`, `Unemployed`, `Career Break`, `Seeking Work`, `Open to Work`, relocation, job search, homemaker, student-only status, `Hardworker`, bare `Professional`, `Experienced Professional`, or `Looking for Opportunities` as non-positions even when `is_current == true` or a source level is present. Exclude them before selecting the Primary Current Position. A phrase that only praises availability, attitude, or generic professionalism is not an occupation. An occupationally qualified phrase such as `Sales Professional` or `Cybersecurity Professional` is not bare `Professional` and may remain a position when the profile marks it as current. If only non-position entries remain, return `value: "unknown"` with `confidence: "low"`.
-2. Consider only the remaining `experience[]` entries with `is_current == true`. If no current position exists, return `value: "unknown"` with `confidence: "low"`; Historical positions cannot determine `seniority_level`.
-3. When multiple positions are current, use `active_experience_title` to identify the primary one. If that field is absent or cannot be matched, use the current entry with `order_in_profile == 1`. Other concurrent positions remain search-text evidence but cannot change the level.
-4. Only after a real occupational Primary Current Position survives steps 1-3 may you read its `active_experience_management_level` or matching `experience[].level`; otherwise evaluate only the unambiguous title of that selected position. A source level attached to an excluded status or self-label cannot resurrect that entry as a position and must be ignored.
-5. Career length and professional credentials cannot determine `seniority_level`. Do not use years of experience, age, tenure, education, certifications, achievements, or assumed expertise to raise or lower it.
+1. Consider only `experience[]` entries with `is_current == true`. If no current position exists, return `value: "unknown"` with `confidence: "low"`; Historical positions cannot determine `seniority_level`.
+2. When multiple positions are current, use `active_experience_title` to identify the primary one. If that field is absent or cannot be matched, use the current entry with `order_in_profile == 1`. Other concurrent positions remain search-text evidence but cannot change the level.
+3. Use `active_experience_management_level` for the selected position when available; otherwise use the matching current `experience[].level`; otherwise evaluate only the unambiguous title of the selected position.
+4. Career length and professional credentials cannot determine `seniority_level`. Do not use years of experience, age, tenure, education, certifications, achievements, or assumed expertise to raise or lower it.
 
 Values use this exact comparison order:
 
@@ -122,8 +115,6 @@ Use `high` only when the selected current position and the rule for the returned
 | `manage_team` | Explicitly manages or supervises employees and is accountable for team assignment, performance, or delivery. |
 | `decision_maker` | Holds explicit organizational, strategic, budget, policy, or executive decision authority beyond ordinary team supervision. |
 | `unknown` | Available evidence cannot reliably determine leadership scope. |
-
-Unlike current `role_family` and `seniority_level`, `management_scope` is the strongest explicitly evidenced leadership scope anywhere in the candidate's current or historical work. Inspect every `summary` and every `experience[].description` before deciding. An explicit statement such as `supervised a group of Service Team Members`, `managed 10 employees`, or `co-managed a team of 15` establishes at least `manage_team`; it must not return `unknown` merely because the role is historical or the current role lacks management evidence. Title words alone still do not establish scope. Before returning, compare this hard field with `ownership_search_text`: if ownership says the candidate supervised or managed a team but `management_scope` is `unknown`, `none`, or `lead_no_report`, the output is internally inconsistent and must be corrected.
 
 `industries.value` must be a non-empty array containing only these 20 LinkedIn Industry V2 top-level labels:
 
@@ -177,8 +168,6 @@ SOFT-TEXT PRIORITY ORDER:
 
 A valid omission is always better than an unsupported enrichment. When completeness conflicts with a source boundary, the source boundary always wins. Use `not_provided` whenever useful text would require a forbidden source. Do not borrow evidence from another dimension to avoid `not_provided`, and do not treat inspection of every permitted source as a requirement to fill every dimension.
 
-A summary is not automatically work evidence. Distinguish completed or current work from self-presentation and future intent. Aspirations, interests, goals, desired future roles, ideal workplaces, motivational statements, and generic traits do not establish experience, responsibilities, domain, ownership, or achievements. A stated interest such as dentistry or exotic-animal practice is not evidence that the candidate worked in that area. A goal to grow a team or business is not evidence that the candidate already led that team or growth. An explicitly stated current skill may remain skills evidence, but wanting to learn, seeking exposure, or describing oneself as motivated does not establish proficiency.
-
 Use as few words as the permitted evidence supports. A precise two-word phrase is better than a padded sentence. Each non-missing dimension must contain no more than 60 English words. There is no minimum length. Write focused phrases or one or two coherent clauses; do not add generic praise, unsupported adjectives, or repeated boilerplate. Do not begin domain text with a shared boilerplate prefix such as `Employment context:`.
 
 Preserve exact high-value names of tools, systems, certifications, licenses, works, publications, awards, employers, and all meaningful ranks, quantities, percentages, and dates. Add only direct synonyms, standard abbreviations, and immediate parent concepts. Do not strengthen verbs, scope, certainty, or impact. Do not combine unrelated fields into a new biographical claim.
@@ -197,16 +186,13 @@ RESPONSIBILITIES DECISION:
 
 SKILLS DECISION:
 
-1. Start with a source-gating pass: temporarily hide `education`, `courses`, `certifications`, licenses, and exam preparation. Build the complete skills evidence set only from `experience[].description`, `summary`, `skills[]`, and every specific occupational title. Draft `skills_search_text` only from that gated set. Do not stop after reading `skills[]`, whether it is populated or empty.
-2. Prefer grounded tools, systems, methods, and capabilities from descriptions or summaries. Then preserve useful explicit skills and add at most one concise neutral capability from each distinct specific occupation when it adds missing retrieval meaning. For example, `Accountant` may yield `Accounting`, `Family Nurse Practitioner` may yield `Family nurse practitioner clinical practice`, and `Paralegal` may yield `Paralegal practice`.
-3. A raw skill token is not automatically valid. Retain it only when it has stable standalone occupational meaning in this profile. Filter hierarchy words, UI residue, duplicates, generic praise, sentence fragments, and context-dependent words such as `responsible`, `less`, `concrete`, `safe`, `green`, `projects`, or `director`.
-4. When the available skill list is long, prioritize capabilities corroborated by descriptions, summaries, or specific occupations, followed by discriminating standalone technical skills. Omit lower-value unrelated, generic, or weakly contextualized items before omitting grounded capabilities.
-5. Group related evidence into coherent capability phrases instead of copying a raw keyword list. Prefer `SQL reporting, stored-procedure maintenance, and service-desk support` over `programming; deployment; software; sensors; reports; ticketing` when descriptions support the grouped wording. Do not copy raw `skills[]` as a keyword list.
-6. Preserve discriminating names such as `Oomnitza`, `Microsoft Excel`, `Google Sheets`, `Salesforce Commerce Cloud`, `HubSpot`, or other exact source systems.
-7. Never use `education`, `courses`, `certifications`, or licenses as a source for `skills_search_text`. Keep their names and status only in `education_search_text`. A related capability may still appear in skills only when the gated evidence set independently supplies it; write only the independently supported capability and do not import credential or coursework wording. For example, DataCamp courses named `Cleaning data in R`, `Data Visualization in R`, or `Exploratory Data Analysis in R` do not authorize any R capability in skills when no gated source mentions R. Study, exam preparation, and possession of a credential are not evidence that a skill was applied.
-8. A specific occupational title may contribute a concise neutral skill concept, but a generic hierarchy title contributes nothing. Apply this consistency rule: when responsibilities contains a valid title-derived occupational concept and skills would otherwise omit that occupation, include the corresponding neutral capability in skills. For example, `Teacher` may yield `Teaching and instruction` in both dimensions, and `Yoga Instructor` may yield `Yoga instruction` in both dimensions. Do not add methods, tools, populations, settings, or proficiency beyond the title.
-9. Never convert `skills[]` into experience or responsibilities, and never claim that a listed skill was applied without work evidence.
-10. If no valid content remains, return exactly `not_provided`.
+1. Use explicit tools, systems, methods, and skills from `skills[]`, `summary`, and `experience[].description`.
+2. Filter generic terms, hierarchy words, UI residue, duplicates, and context-free fragments. Do not copy raw `skills[]` as a keyword list.
+3. Preserve discriminating names such as `Oomnitza`, `Microsoft Excel`, `Google Sheets`, `Salesforce Commerce Cloud`, `HubSpot`, or other exact source systems.
+4. Courses may contribute only wording explicitly marked as `coursework`; study or exam preparation is not proficiency or a completed credential.
+5. A specific occupational title may contribute one concise neutral skill concept, but a generic hierarchy title contributes nothing.
+6. Never convert `skills[]` into experience or responsibilities, and never claim that a listed skill was applied without work evidence.
+7. If no valid content remains, return exactly `not_provided`.
 
 EXPERIENCE DECISION:
 
@@ -230,14 +216,13 @@ OWNERSHIP DECISION:
 1. Use only explicit ownership, workstream leadership, people management, budget authority, policy authority, or organizational decision statements from `summary` or `experience[].description`.
 2. If `is_decision_maker == true` is the only qualifying evidence, output exactly `Explicit decision-maker status.`
 3. A title alone never establishes an ownership action, team, budget, decision scope, or operating scope. Owner, Founder, President, Director, Manager, and Lead titles may remain role history in experience but cannot supply ownership text by themselves.
-4. Self-description such as `effective leader`, `experienced leader`, `take-charge person`, `thought leader`, or `strong leadership skills` is generic praise and does not establish ownership. A future intention to lead or grow a team also establishes nothing.
-5. Ordinary duties remain responsibilities even when performed by a leader. Do not move coordination, administration, technical review, customer service, marketing execution, or tool administration into ownership unless the source explicitly describes leadership or authority.
-6. Achievements and ownership require explicit candidate evidence. If no qualifying evidence exists, return exactly `not_provided`.
+4. Ordinary duties remain responsibilities even when performed by a leader. Do not move coordination, administration, technical review, customer service, marketing execution, or tool administration into ownership unless the source explicitly describes leadership or authority.
+5. Achievements and ownership require explicit candidate evidence. If no qualifying evidence exists, return exactly `not_provided`.
 
 ACHIEVEMENTS DECISION:
 
 1. Use only explicit awards, rankings, publications, works, launches, quantified outcomes, improvements, savings, growth, quality changes, or other evidenced impact from dedicated fields, `summary`, or `experience[].description`.
-2. A client name, employer, title, responsibility, credential, or area of work is not an achievement by itself. A number alone also establishes nothing: workload, portfolio size, team size, transaction volume, geographic coverage, or other scale remains responsibilities or ownership unless the source explicitly states a result, target attainment, improvement, award, or ranking.
+2. A client name, employer, title, responsibility, credential, or area of work is not an achievement by itself.
 3. Preserve exact work names, award names, ranks, quantities, percentages, and measured results.
 4. Never turn routine duties, prestigious employers, notable clients, or generic praise into achievements.
 5. If no qualifying evidence exists, return exactly `not_provided`.
@@ -254,27 +239,19 @@ Critical examples:
 
 - `Manager at Jim's Happy Bee Honey` with no description: responsibilities and skills must be `not_provided`, not office coordination, clerical support, or administrative management.
 - `Program Coordinator` with no description may yield the neutral concept `Program coordination`, but not cross-functional delivery, stakeholder management, or project outcomes.
-- `Seeking a small and exotic animal practice` and listing dentistry or surgery as interests do not establish veterinary domain experience or performed clinical responsibilities.
-- `My goal is to grow a collective` does not establish that the candidate currently leads a team, owns a workstream, or performs organizational growth responsibilities.
 - `Process Engineer at Intel`, a Chemical Engineering degree, Intel company tags, and explicit industry `Manufacturing`: domain may say `Manufacturing`, but not semiconductor design, chemical engineering processes, artificial intelligence, or other company- or education-derived specializations.
-- `Pediatric Resident at Mercy Health` with explicit industry `Consumer Services` and no summary or description: domain may say only `Consumer services`; the medical title and employer name cannot add hospitals, healthcare, pediatrics, or clinical care to domain.
 - `Managing Director - Reinsurance` with only `is_decision_maker == true`: ownership must be exactly `Explicit decision-maker status.`, not `Oversaw reinsurance operations`.
 - `NCI Community Oncology Research Program Director` with no description: experience may say `Current role: NCI Community Oncology Research Program Director.`, but not `Directed an oncology research program.`
 - A list of prestigious clients is experience context, not an achievement, unless the source states a result, award, launch, or measurable impact.
 - `Studying Spanish and preparing for a real-estate license examination` belongs in education and does not establish Spanish proficiency or a completed real-estate credential.
-- A theatre degree, environmental-science degree, Scrum certification, or customer-experience course belongs in education. It contributes nothing to skills unless an independently permitted skills source names the related capability.
-- `Responsible for leasing and renewals for over 600 apartment units` describes workload scale, not an achievement. Keep the work in responsibilities and do not create achievements text from the number.
-- A current entry titled only `Professional` with source level `Specialist` is a non-occupational self-label. It leaves no Primary Current Position and must produce `seniority_level.value: "unknown"` with `confidence: "low"`; mapping `Specialist` to `Associate` in this case is invalid.
 
 Before returning, verify that `role_family.value` and every item in `industries.value` belong to the exact allowed lists above, except for the explicit `unknown` absence state. Any other classification label makes the output invalid.
 
-Before returning JSON, audit every `high` value as if it could eliminate the candidate. For `role_family`, verify that the evidence names the Primary Current Position, that all explicit current-function signals are compatible with one canonical function, and that the classification does not depend on historical positions, skills, education, employer industry, company name, or company tags. Any current-function conflict or materially cross-functional current work rejects `high`. For `industries`, verify that every returned label maps from an explicit `experience[].industry`; otherwise confidence cannot be `high`. For `seniority_level`, first repeat the occupational-position gate, then verify that the evidence names a surviving real occupational Primary Current Position and satisfies exactly one six-level rule without using historical roles, years, credentials, professional reputation, status entries, or self-labels. Explicitly reject `Associate/high` when its only path is bare `Professional` plus source level `Specialist`. For `management_scope`, verify that all descriptions were inspected and that explicit team supervision is not omitted. For `management_scope=none`, require explicit evidence of no project, people, or organizational leadership; no management description, a Specialist or individual-contributor title, and the absence of direct-report evidence do not authorize `high`.
+Before returning JSON, audit every `high` value as if it could eliminate the candidate. For `role_family`, reject `high` when the classification depends on skills, education, employer industry, company name, or company tags rather than an explicit work-function source. For `industries`, verify that every returned label maps from an explicit `experience[].industry`; otherwise confidence cannot be `high`. For `seniority_level`, verify that the evidence names the Primary Current Position and satisfies exactly one six-level rule without using historical roles, years, credentials, or professional reputation. For `management_scope=none`, require explicit evidence of no project, people, or organizational leadership; no management description, a Specialist or individual-contributor title, and the absence of direct-report evidence do not authorize `high`.
 
 FINAL DELETION AUDIT:
 
-Before returning, silently identify one permitted source for every generated clause; do not output this audit. For skills, re-check every phrase against the gated evidence set created before reading education and credentials. Delete a clause if its source is forbidden for that dimension, if it depends on company knowledge or company tags, if it contains an action unsupported by `summary` or `experience[].description`, if it adds authority or scope from a title or generic leadership praise, if any skills clause was sourced from education, coursework, certification, licensing, or exam preparation rather than the gated skills evidence set, or if it repeats ordinary responsibilities as ownership or achievements.
-
-Then run a cross-dimension title audit. If a specific occupational title is the permitted reason that `responsibilities_search_text` is not `not_provided`, `skills_search_text` must contain the same neutral occupational capability unless an equivalent capability is already present. `Receptionist` producing `Reception and front desk administration` in responsibilities while skills is `not_provided` is invalid. This audit never applies to a generic hierarchy title.
+Before returning, silently identify one permitted source for every generated clause; do not output this audit. Delete a clause if its source is forbidden for that dimension, if it depends on company knowledge or company tags, if it contains an action unsupported by `summary` or `experience[].description`, if it adds authority or scope from a title, if it turns study or preparation into proficiency, or if it repeats ordinary responsibilities as ownership or achievements.
 
 After deleting an invalid clause, do not replace it with evidence from another field, do not make it more generic to hide the unsupported inference, and do not pad the remaining text. Use `not_provided` if no valid clause remains. Before retaining any `not_provided`, verify only that all permitted sources for that dimension were inspected; completeness never authorizes a forbidden source.
 

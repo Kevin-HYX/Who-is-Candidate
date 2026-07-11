@@ -153,6 +153,15 @@ class PreprocessValidationTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "English"):
                     validate_preprocess_model_output(output)
 
+    def test_rejects_search_text_over_sixty_words(self) -> None:
+        output = valid_model_output()
+        output["embedding_search_texts"]["skills_search_text"] = " ".join(
+            f"word{index}" for index in range(61)
+        )
+
+        with self.assertRaisesRegex(ValueError, "at most 60 English words"):
+            validate_preprocess_model_output(output)
+
     def test_missing_current_work_evidence_stays_unknown(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

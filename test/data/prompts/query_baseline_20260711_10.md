@@ -73,10 +73,6 @@ Meaning: the candidate's highest completed education level, represented by an or
 
 Meaning: `role_family` represents the primary work function of the Primary Current Position. It is not the employer's industry, historical profession, broad career identity, or seniority. Historical positions cannot establish a `high` current `role_family`; when current-function evidence is missing or ambiguous, the Tool does not hard-eliminate the candidate on this field. Use this hard constraint only when the user unmistakably requires that exact function in the candidate's current primary position. Words such as `current`, `professional`, `specialist`, `leader`, or `experienced` do not by themselves make every nearby functional phrase a current-role requirement. `Find a currently working professional with sales and client-advisor experience` maps current employment to `is_currently_working` and sales history to concrete soft preferences; `Find someone whose current primary role is Sales` may use `role_family in ["Sales"]`. When the need can be satisfied by relevant prior functional experience or by a cross-functional occupational title, use a concrete soft preference instead. Use only `in` or `not_in`; `value` must be a non-empty array of exact labels from this project-owned 20-value role table.
 
-Before returning, audit every `role_family` hard constraint separately. Identify the exact user phrase that attaches the requested function to the candidate's current primary position, such as `current finance manager`, `currently works in Sales`, or `current primary role is Engineering`. If no such phrase exists, remove the hard constraint and preserve the functional experience as a concrete soft preference. `Find an operations leader for an analytical laboratory` does not pass this current-role gate; it may use laboratory-operations responsibilities, management scope, and industry evidence, but not `role_family in ["Operations"]` unless the user explicitly requires Operations as the current primary role.
-
-A canonical `role_family` hard constraint captures only its broad 20-value function. It never preserves a narrower occupation, specialty, or title. If the user asks for a current `application architect` or `technical architect`, `role_family in ["Engineering and Technical"]` may enforce the broad current function, but a concrete soft preference must still preserve the requested architecture work. The same rule applies to other narrower occupations: never mark a specific user need as covered merely because its parent role family is hard-filtered.
-
 | Value | Meaning and boundary |
 |---|---|
 | `Administrative` | Office, clerical, scheduling, records, coordination, or executive-assistance work. Do not use for a specialist merely because the job includes paperwork. |
@@ -168,13 +164,12 @@ Never put a child industry or broad free-text label into an `industries` hard co
 Meaning: whether the raw profile explicitly indicates that the candidate currently has an active work experience.
 
 - Allowed operator: `=`
-- When raw `is_working` is a Boolean, it is the authoritative value: `true` maps to `true` and `false` maps to `false`.
-- Only when raw `is_working` is absent or not Boolean does the formula inspect `experience[].is_current`: any explicit `true` maps to `true`; a non-empty experience list whose entries all have Boolean `is_current=false` maps to `false`.
-- Conflicting `is_working` and `experience[].is_current` signals are resolved in favor of the Boolean `is_working` field.
+- `true`: explicitly currently working or has an explicitly current experience
+- `false`: explicitly not currently working and no experience is marked current
 
 Missing current-work evidence is not `false`; it is insufficient evidence, so the Tool keeps that candidate and reports the uncertainty.
 
-This is a coarse raw-data signal, not a semantic guarantee of a substantive current occupation. Source data may mark status entries such as `Retired`, student-only activity, or another non-occupational entry as current. Use this hard constraint only when the user explicitly requires the raw active-work signal. If the user requires a verified substantive current occupation, do not pretend this field enforces that guarantee; use current-role hard constraints only when their own meaning is explicit.
+This is a coarse raw-data signal, not a semantic guarantee of a substantive current occupation. Source data may mark status entries such as `Retired`, student-only activity, or another non-occupational entry as current. Use this hard constraint only when the user explicitly requires the raw active-work signal. If the user requires a verified substantive current occupation, warn that this field cannot enforce that requirement perfectly, use current-role hard constraints only when their own meaning is explicit, and inspect returned `raw_profile` before presenting a candidate as currently employed.
 
 Do not hard-filter on certificates, skills, locations, company type, team size, achievements, domain-specific tenure, or other sparse evidence fields. Convert those requirements into soft preferences.
 
@@ -219,10 +214,6 @@ Broad user language must remain broad. A parent concept never authorizes guessed
 
 Run this deletion audit after drafting, not before. A fluent and specific sentence that fails traceability is worse than a short faithful phrase.
 
-### User-requirement coverage gate
-
-After the traceability deletion audit, enumerate the user's explicit requirements and check that each is represented exactly once by either a semantically exact hard constraint or one suitable soft preference. A broad parent hard constraint does not cover a narrower child requirement: `Engineering and Technical` does not cover `application or technical architecture`, and a top-level industry does not cover a named sub-industry or business process. Add the missing faithful soft preference without inventing standard duties or examples. Conversely, do not duplicate a requirement that is already represented at the same semantic precision.
-
 ### Weight meaning
 
 Weights express continuous relative importance within this QueryPlan. They are not discrete levels. Values such as `0.63`, `1.27`, and `-1.42` are valid. The Tool computes the effective weight deterministically:
@@ -231,7 +222,7 @@ Weights express continuous relative importance within this QueryPlan. They are n
 effective_weight_i = input_weight_i / sum(abs(all_input_weights))
 ```
 
-Before output rounding, the absolute effective weights sum to `1.0`, so adding preferences or increasing every input weight cannot inflate the total score. The Tool returns each effective `weight` rounded to six decimal places, so the displayed absolute weights may differ from `1.0` by a few millionths.
+The absolute effective weights therefore sum to `1.0`, so adding preferences or increasing every input weight cannot inflate the total score. The `weight` returned in each `soft_preference_scores` item is this effective normalized weight.
 
 Use these continuous ranges as guidance rather than as enumerated values:
 
@@ -269,7 +260,7 @@ Relative ratios still matter before normalization: an input weight of `1.6` has 
 | "Needs Python backend experience" | `{"dimension":"skills_search_text","text":"Use Python for backend software development.","weight":1.0}` | `{"dimension":"skills_search_text","text":"Build Python APIs, data pipelines, and microservices.","weight":1.0}` | Backend work does not authorize guessed APIs, pipelines, or microservices. Preserve only the relationship the user supplied. |
 | "Has worked in healthcare finance" | `{"dimension":"domain_search_text","text":"Work in healthcare finance.","weight":1.0}` | `{"dimension":"domain_search_text","text":"Handle patient billing, insurance claims, revenue cycle, reimbursement, and healthcare compliance.","weight":1.0}` | Healthcare finance does not authorize guessed child processes. Add them only when the user names them. |
 | "Has managed a team" | `{"dimension":"ownership_search_text","text":"Directly manage a team of employees.","weight":1.0}` | `{"dimension":"ownership_search_text","text":"Assign work, give performance feedback, develop employees, and own team delivery.","weight":1.0}` | Team management establishes people-management scope, not every standard management duty. |
-| "Has delivered a complete system implementation" | `{"dimension":"experience_search_text","text":"Deliver a complete system implementation end to end.","weight":1.0}` | `{"dimension":"experience_search_text","text":"Lead requirements, solution design, cross-team execution, testing, and production launch.","weight":1.0}` | `Complete` supports end-to-end delivery, but it does not reveal the system type, phases, or leadership duties involved. |
+| "Has delivered a complete system implementation" | `{"dimension":"experience_search_text","text":"Deliver a business-system implementation end to end.","weight":1.0}` | `{"dimension":"experience_search_text","text":"Lead requirements, solution design, cross-team execution, testing, and production launch.","weight":1.0}` | `Complete` supports end-to-end delivery, but it does not reveal the phases or leadership duties involved. |
 | "Prefer measurable cost or efficiency outcomes" | `{"dimension":"achievements_search_text","text":"Produce measurable cost reduction or efficiency improvement.","weight":0.8}` | `{"dimension":"achievements_search_text","text":"Reduce costs by 50% and improve operational error rates.","weight":0.8}` | The percentage and error-rate outcome are fabricated unless the user supplied them. |
 | "Prefer finance education or CPA" | `{"dimension":"education_search_text","text":"Have an educational background in accounting or finance, or hold a professional finance qualification such as CPA.","weight":0.6}` | `{"dimension":"education_search_text","text":"Good education with certifications","weight":0.6}` | The counterexample does not name the relevant field or qualification. |
 
